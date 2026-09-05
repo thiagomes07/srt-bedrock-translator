@@ -1635,9 +1635,6 @@ class TranslatorJob:
                         record.pop("review_reason", None)
                         record.pop("review_models", None)
                     self.translations[cue_id] = record
-                if soft_ids:
-                    flagged = set(state.get("review_cue_ids", [])) | {int(cue_id) for cue_id in soft_ids}
-                    state["review_cue_ids"] = sorted(flagged)
                 self.save_translations()
                 if not polish:
                     completed.add(batch.number)
@@ -2271,7 +2268,7 @@ def compact_state(state: dict[str, Any]) -> dict[str, Any]:
         "current": current,
         "usage": state.get("usage", {}),
         "quality": quality_summary,
-        "review_cues": len(state.get("review_cue_ids", [])),
+        "review_cues": sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("review_flag")),
         "stuck_batch": bool(
             stored_status == "running"
             and is_alive
@@ -2349,13 +2346,12 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
         state["error_cues"] = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "error")
         state["pending_cues"] = max(0, int(state.get("total_cues") or 0) - int(state.get("done_cues") or 0))
         state["warning_cues"] = 0
+    # translations.json e a fonte da verdade: um retry posterior limpa a flag, entao
+    # derivar daqui evita mostrar cue que ja foi corrigido.
     review_ids = sorted(
-        {
-            int(cue_id)
-            for cue_id, rec in translations.items()
-            if isinstance(rec, dict) and rec.get("review_flag")
-        }
-        | {int(cue_id) for cue_id in state.get("review_cue_ids", [])}
+        int(cue_id)
+        for cue_id, rec in translations.items()
+        if isinstance(rec, dict) and rec.get("review_flag")
     )
     state["review_cue_ids"] = review_ids
     state["review_cues"] = len(review_ids)
