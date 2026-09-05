@@ -1,4 +1,14 @@
 {
   "profile": "default",
-  "region": "us-east-1"
+  "region": "us-east-1",
+
+  "_comentario_prices": "Opcional. Preços por 1.000 tokens em USD, para a estimativa de custo. A API de preços da AWS não publica os Claude 4.x, então informe-os aqui. Consulte https://aws.amazon.com/bedrock/pricing/",
+  "prices": {
+    "us.anthropic.claude-sonnet-4-6": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    }
+  }
 }

@@ -306,6 +306,109 @@ COMMON_NORMAL_WORDS = {
 }
 
 
+# Preços por 1.000 tokens, em USD, colhidos da API de preços da AWS para us-east-1.
+# A API não publica os Claude 4.x, então eles não aparecem aqui de propósito: é melhor a
+# ferramenta dizer "preço não configurado" do que inventar um número e passar por oficial.
+BUNDLED_PRICES: dict[str, dict[str, float]] = {
+    "nova-pro": {"input": 0.0008, "output": 0.0032, "cache_read": 0.0002, "cache_write": 0.0},
+    "nova-lite": {"input": 0.00006, "output": 0.00024, "cache_read": 0.000015, "cache_write": 0.0},
+    "nova-micro": {"input": 0.000035, "output": 0.00014},
+    "mistral-large-3": {"input": 0.0005, "output": 0.0015},
+    "mistral-small": {"input": 0.001, "output": 0.003},
+    "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
+}
+BUNDLED_PRICES_DATE = "2026-09-05"
+PRICE_KEYS = ("input", "output", "cache_read", "cache_write")
+USAGE_TO_PRICE = {
+    "inputTokens": "input",
+    "outputTokens": "output",
+    "cacheReadInputTokens": "cache_read",
+    "cacheWriteInputTokens": "cache_write",
+}
+
+
+def normalize_model_key(model_id: str) -> str:
+    """us.anthropic.claude-sonnet-4-6 -> claudesonnet46, para casar id com tabela."""
+    corpo = re.sub(r"^(us|eu|apac|global)\.", "", str(model_id or ""))
+    corpo = re.sub(r"^[a-z0-9]+\.", "", corpo)
+    corpo = re.sub(r"-v\d+(:\d+)?$", "", corpo)
+    return re.sub(r"[^a-z0-9]", "", corpo.lower())
+
+
+def price_store_path() -> Path:
+    return Path.home() / ".config" / "srt-bedrock-translator" / "prices.json"
+
+
+def load_prices() -> dict[str, dict[str, Any]]:
+    """Tabela de preços por modelo, com a origem de cada entrada.
+
+    Ordem de precedência: preço definido pelo usuário, depois o que foi buscado na
+    AWS, depois o instantâneo embutido. A origem viaja junto para a tela nunca
+    mostrar uma estimativa com cara de número oficial.
+    """
+    tabela: dict[str, dict[str, Any]] = {}
+    for chave, valores in BUNDLED_PRICES.items():
+        tabela[normalize_model_key(chave)] = {**valores, "_fonte": f"instantâneo AWS de {BUNDLED_PRICES_DATE}"}
+    buscados = load_json(price_store_path(), {})
+    for chave, valores in (buscados.get("modelos") or {}).items():
+        if isinstance(valores, dict):
+            tabela[normalize_model_key(chave)] = {
+                **{k: v for k, v in valores.items() if k in PRICE_KEYS},
+                "_fonte": f"API de preços da AWS ({buscados.get('buscado_em', 'data desconhecida')})",
+            }
+    for chave, valores in (LOCAL_DEFAULTS.get("prices") or {}).items():
+        if isinstance(valores, dict):
+            tabela[normalize_model_key(chave)] = {
+                **{k: float(v) for k, v in valores.items() if k in PRICE_KEYS},
+                "_fonte": "definido por você em srt_translator.local.json",
+            }
+    return tabela
+
+
+def price_for_model(model_id: str, tabela: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    alvo = normalize_model_key(model_id)
+    if not alvo:
+        return None
+    if alvo in tabela:
+        return tabela[alvo]
+    candidatos = [chave for chave in tabela if chave and (chave in alvo or alvo in chave)]
+    if not candidatos:
+        return None
+    return tabela[max(candidatos, key=len)]
+
+
+def estimate_cost(usage_by_model: dict[str, Any], tabela: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Custo estimado por modelo. Modelo sem preço aparece com custo nulo e aviso."""
+    linhas = []
+    total = 0.0
+    completo = True
+    for modelo, uso in sorted((usage_by_model or {}).items()):
+        preco = price_for_model(modelo, tabela)
+        custo = 0.0
+        if preco:
+            for campo_uso, campo_preco in USAGE_TO_PRICE.items():
+                valor = preco.get(campo_preco)
+                if valor is None:
+                    continue
+                custo += (int(uso.get(campo_uso, 0) or 0) / 1000.0) * float(valor)
+        else:
+            completo = False
+        linhas.append(
+            {
+                "model": modelo,
+                "calls": int(uso.get("calls", 0) or 0),
+                "input": int(uso.get("inputTokens", 0) or 0),
+                "output": int(uso.get("outputTokens", 0) or 0),
+                "cache_read": int(uso.get("cacheReadInputTokens", 0) or 0),
+                "cache_write": int(uso.get("cacheWriteInputTokens", 0) or 0),
+                "cost_usd": round(custo, 6) if preco else None,
+                "price_source": preco.get("_fonte") if preco else None,
+            }
+        )
+        total += custo
+    return {"rows": linhas, "total_usd": round(total, 6), "complete": completo}
+
+
 def utc_now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -2080,7 +2183,7 @@ class TranslatorJob:
             self.logger.event("WARN", "Não consegui criar contexto via LLM; usando guia genérico.", error=str(exc)[:500])
         atomic_write_json(self.context_path, context)
         state["context"] = context
-        self.add_usage(state, meta if "meta" in locals() else {})
+        self.add_usage(state, meta if "meta" in locals() else {}, locals().get("model", ""))
         self.save_state(state)
         self.logger.event("INFO", "Contexto preparado.", status="ok")
 
@@ -2210,7 +2313,7 @@ class TranslatorJob:
             )
         finally:
             self.config.models = modelos_originais
-        self.add_usage(state, meta)
+        self.add_usage(state, meta, _modelo)
         payload = extract_json_object(texto)
         itens = payload.get("itens") if isinstance(payload, dict) else None
         if not isinstance(itens, list):
@@ -2366,7 +2469,7 @@ class TranslatorJob:
                 for cue in grupo:
                     self.translations[str(cue.id)]["status"] = "ok"
                 continue
-            self.add_usage(state, meta)
+            self.add_usage(state, meta, modelo)
             novos = validate_translation_payload(extract_json_object(texto), sintetico, protegidos)
             agora = utc_now()
             for cue_id, texto_novo in novos.items():
@@ -2493,7 +2596,7 @@ class TranslatorJob:
             tool_config=translation_tool_config(),
             cache_prefix=cache_prefix,
         )
-        self.add_usage(state, meta)
+        self.add_usage(state, meta, model)
         if outcome.get("soft_accepted") and outcome.get("payload"):
             return dict(outcome["payload"]), model, outcome
         payload = extract_json_object(text)
@@ -2772,10 +2875,22 @@ class TranslatorJob:
                 raise JobStopped()
             time.sleep(min(1.0, end - time.time()))
 
-    def add_usage(self, state: dict[str, Any], meta: dict[str, Any]) -> None:
+    def add_usage(self, state: dict[str, Any], meta: dict[str, Any], model: str = "") -> None:
         usage = meta.get("usage") if isinstance(meta, dict) else None
         if not isinstance(usage, dict):
             return
+        if model:
+            por_modelo = state.setdefault("usage_by_model", {})
+            atual = por_modelo.setdefault(
+                model,
+                {"calls": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0},
+            )
+            atual["calls"] = int(atual.get("calls", 0)) + 1
+            for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheWriteInputTokens"):
+                try:
+                    atual[key] = int(atual.get(key, 0)) + int(usage.get(key, 0) or 0)
+                except Exception:
+                    pass
         total = state.setdefault(
             "usage",
             {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0},
@@ -3337,6 +3452,7 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
         and is_alive
         and (int(current.get("cycle") or 0) >= 2 or int(current.get("soft_failures") or 0) >= 3)
     )
+    state["cost"] = estimate_cost(state.get("usage_by_model") or {}, load_prices())
     state["log_tail"] = JsonLogger(job_dir, echo=False).tail(240)
     state["preview"] = preview_current(job_dir, state, translations)
     state["compare"] = compare_recent(state, translations)
@@ -3948,6 +4064,13 @@ UI_HTML = r"""<!doctype html>
     .result ul { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: #444b56; line-height: 1.6; }
 
     /* ---- caminhos ---- */
+    .custo { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .custo th, .custo td { padding: 6px 8px; border-bottom: 1px solid #eef1f6; text-align: right; }
+    .custo th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: #f7f9fc; }
+    .custo th:first-child, .custo td:first-child { text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .custo tfoot td { font-weight: 800; border-bottom: 0; border-top: 1px solid var(--line); }
+    .custo .semPreco { color: var(--amber); font-weight: 700; }
+    .custo-nota { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
     .paths { display: grid; gap: 7px; }
     .pathline { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
     .pathline .pk { color: var(--muted); font-weight: 700; min-width: 74px; flex: none; }
@@ -4235,6 +4358,10 @@ UI_HTML = r"""<!doctype html>
 
       <div class="result" id="result"></div>
 
+      <div class="panel-body" id="custoWrap" hidden>
+        <div class="sub-head">Consumo por modelo <button class="info" data-help="custo" aria-label="Ajuda">i</button></div>
+        <div id="custo"></div>
+      </div>
       <div class="panel-body">
         <div class="sub-head">Arquivos deste trabalho <button class="info" data-help="arquivos" aria-label="Ajuda">i</button></div>
         <div class="paths" id="paths"></div>
@@ -4458,6 +4585,12 @@ UI_HTML = r"""<!doctype html>
         p: "Falas que o sistema achou suspeitas de não terem sido traduzidas, mas que dois modelos diferentes devolveram exatamente iguais. Quando isso acontece, quem provavelmente está errado é a suspeita, e não os modelos.",
         e: "Refrão de música como <code>Guli guli guli guli ram sam sam</code> é para ficar igual mesmo: não existe tradução disso. A fala entra nesta conta para você dar uma conferida depois, mas não impede o arquivo de sair como OK.",
         d: ""
+      },
+      custo: {
+        t: "Consumo por modelo",
+        p: "Quantas chamadas cada modelo atendeu, quantos tokens gastou e quanto isso custa em dólar. A entrada aparece separada do que veio do cache, que é cobrado por volta de um décimo.",
+        e: "O custo é <b>estimativa</b>, e a tabela diz de onde veio cada preço. Parte é buscada na API de preços da AWS pelo comando <code>refresh-prices</code>; parte vem de um instantâneo embutido.<br><br>A AWS não publica preço dos modelos Claude 4.x na API, então eles aparecem como <b>sem preço</b> até você informar. Consulte a página de preços do Bedrock e escreva em <code>srt_translator.local.json</code>:<br><code>{\"prices\": {\"us.anthropic.claude-sonnet-4-6\": {\"input\": 0.003, \"output\": 0.015}}}</code><br><br>Os valores são por mil tokens. Enquanto faltar preço de algum modelo, o total aparece com um sinal de mais, para você saber que ele está incompleto.",
+        d: "Só olhe. Para o total ficar completo, informe o preço dos modelos que faltam."
       },
       arquivos: {
         t: "Arquivos gerados",
@@ -4879,6 +5012,7 @@ UI_HTML = r"""<!doctype html>
         pathLine("Relatório", job.quality_report_path) +
         `<div class="pathline"><span class="pk">Números</span><span class="pv">${done}/${total} traduzidas &middot; ${job.pending_cues || q.pending_cues || 0} pendentes &middot; ${job.error_cues || 0} erros &middot; ${job.warning_cues || q.warning_cues || 0} avisos${usage.totalTokens ? ` &middot; ${Number(usage.totalTokens).toLocaleString("pt-BR")} tokens` : ""}${usage.cacheReadInputTokens ? ` (${Number(usage.cacheReadInputTokens).toLocaleString("pt-BR")} reaproveitados do cache)` : ""}</span></div>`;
 
+      renderCusto(job.cost);
       const err = document.querySelector("#lastError");
       const showErr = job.last_error && job.status !== "complete";
       err.className = "alert-line" + (showErr ? " show" : "");
@@ -4977,6 +5111,34 @@ UI_HTML = r"""<!doctype html>
       if (follow) box.scrollTop = box.scrollHeight;
     }
 
+    function renderCusto(custo) {
+      const wrap = document.querySelector("#custoWrap");
+      const linhas = (custo && custo.rows) || [];
+      wrap.hidden = linhas.length === 0;
+      if (!linhas.length) return;
+      const n = v => Number(v || 0).toLocaleString("pt-BR");
+      const semPreco = linhas.filter(r => r.cost_usd === null).map(r => r.model);
+      const fontes = [...new Set(linhas.map(r => r.price_source).filter(Boolean))];
+      document.querySelector("#custo").innerHTML =
+        `<table class="custo"><thead><tr>
+           <th>modelo</th><th>chamadas</th><th>entrada</th><th>cache lido</th><th>saída</th><th>custo estimado</th>
+         </tr></thead><tbody>` +
+        linhas.map(r => `<tr>
+            <td>${escapeHtml(shortModel(r.model))}</td>
+            <td>${n(r.calls)}</td>
+            <td>${n(r.input)}</td>
+            <td>${n(r.cache_read)}</td>
+            <td>${n(r.output)}</td>
+            <td>${r.cost_usd === null ? "<span class='semPreco'>sem preço</span>" : "US$ " + r.cost_usd.toFixed(5)}</td>
+          </tr>`).join("") +
+        `</tbody><tfoot><tr><td>total</td><td colspan="4"></td>
+           <td>US$ ${Number(custo.total_usd || 0).toFixed(5)}${custo.complete ? "" : "+"}</td></tr></tfoot></table>` +
+        `<div class="custo-nota">${
+          semPreco.length
+            ? `<b>Estimativa incompleta.</b> Sem preço para ${semPreco.map(escapeHtml).join(", ")} — rode <code>refresh-prices</code> ou defina em <code>srt_translator.local.json</code>. `
+            : ""
+        }${fontes.length ? "Origem do preço: " + fontes.map(escapeHtml).join("; ") + "." : ""}</div>`;
+    }
     function renderCue(item) {
       const st = item.status || "";
       return `<div class="cue">
@@ -5146,6 +5308,70 @@ def doctor(args: argparse.Namespace) -> int:
     if bad_models:
         print("Se a falha for AccessDeniedException, confira Model access no console do Amazon Bedrock.")
     return 0 if ok_models else 2
+
+
+def refresh_prices_cli(args: argparse.Namespace) -> int:
+    """Busca preços na API da AWS e guarda o que ela souber informar."""
+    aws = shutil.which("aws") or "aws"
+    print(f"Consultando a API de preços da AWS para {args.region}...")
+    cmd = [
+        aws, "pricing", "get-products", "--service-code", "AmazonBedrock",
+        "--region", "us-east-1", "--profile", args.profile,
+        "--filters", f"Type=TERM_MATCH,Field=regionCode,Value={args.region}",
+        "--page-size", "100", "--output", "json",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=args.call_timeout or 300)
+    if proc.returncode != 0:
+        erro = (proc.stderr or proc.stdout).strip()[:600]
+        print("Não consegui consultar a API de preços.")
+        print(erro)
+        print("\nIsso costuma ser falta da permissão pricing:GetProducts. A ferramenta segue")
+        print("funcionando com o instantâneo embutido; você também pode definir preços à mão")
+        print("em srt_translator.local.json, na chave prices.")
+        return 1
+    categorias = {
+        "input tokens": "input",
+        "output tokens": "output",
+        "prompt cache read input tokens": "cache_read",
+        "prompt cache write input tokens": "cache_write",
+    }
+    penaliza = ("flex", "priority", "batch", "latency", "provisioned", "custom-model", "commit")
+    melhor: dict[str, dict[str, tuple[float, int]]] = {}
+    dados = json.loads(proc.stdout)
+    for bruto in dados.get("PriceList", []):
+        item = json.loads(bruto) if isinstance(bruto, str) else bruto
+        attrs = item.get("product", {}).get("attributes", {})
+        categoria = categorias.get(str(attrs.get("inferenceType", "")).strip().lower())
+        modelo = attrs.get("model")
+        if not categoria or not modelo:
+            continue
+        uso = str(attrs.get("usagetype", "")).lower()
+        nota = sum(1 for termo in penaliza if termo in uso)
+        for termo in item.get("terms", {}).get("OnDemand", {}).values():
+            for dim in termo.get("priceDimensions", {}).values():
+                try:
+                    valor = float(dim.get("pricePerUnit", {}).get("USD", 0))
+                except Exception:
+                    continue
+                atual = melhor.setdefault(modelo, {}).get(categoria)
+                if atual is None or nota < atual[1]:
+                    melhor[modelo][categoria] = (valor, nota)
+    tabela = {modelo: {c: round(v[0], 8) for c, v in cats.items()} for modelo, cats in melhor.items() if cats}
+    destino = price_store_path()
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(destino, {"buscado_em": utc_now()[:10], "regiao": args.region, "modelos": tabela})
+    print(f"Guardei preços de {len(tabela)} modelos em {destino}")
+    faltando = []
+    for modelo in parse_models(args.models) if getattr(args, "models", None) else DEFAULT_MODELS:
+        if not price_for_model(modelo, load_prices()):
+            faltando.append(modelo)
+    if faltando:
+        print("\nA AWS não publica preço para estes modelos da sua fila:")
+        for modelo in faltando:
+            print(f"  {modelo}")
+        print("\nConsulte https://aws.amazon.com/bedrock/pricing/ e defina em srt_translator.local.json:")
+        print(json.dumps({"prices": {faltando[0]: {"input": 0.003, "output": 0.015}}}, indent=2, ensure_ascii=False))
+    return 0
 
 
 def qc_cli(args: argparse.Namespace) -> int:
@@ -5416,6 +5642,26 @@ Freud.
     poucos, _ = select_for_semantic_review(risco_cues, risco_tr, min_signals=1, sample_pct=0)
     assert poucos == [1], poucos
 
+    # Preço: casamento de id, cálculo com cache e honestidade sobre o que falta.
+    assert normalize_model_key("us.amazon.nova-pro-v1:0") == "novapro"
+    assert normalize_model_key("mistral.mistral-large-3-675b-instruct") == "mistrallarge3675binstruct"
+    tabela_teste = {"novapro": {"input": 0.0008, "output": 0.0032, "cache_read": 0.0002, "_fonte": "teste"}}
+    assert price_for_model("us.amazon.nova-pro-v1:0", tabela_teste) is not None
+    assert price_for_model("us.anthropic.claude-sonnet-4-6", tabela_teste) is None
+    uso = {
+        "us.amazon.nova-pro-v1:0": {"calls": 2, "inputTokens": 10000, "outputTokens": 1000, "cacheReadInputTokens": 5000},
+        "us.anthropic.claude-sonnet-4-6": {"calls": 1, "inputTokens": 1000, "outputTokens": 100},
+    }
+    custo = estimate_cost(uso, tabela_teste)
+    nova = next(r for r in custo["rows"] if "nova" in r["model"])
+    esperado = 10000 / 1000 * 0.0008 + 1000 / 1000 * 0.0032 + 5000 / 1000 * 0.0002
+    assert abs(nova["cost_usd"] - esperado) < 1e-9, (nova["cost_usd"], esperado)
+    claude = next(r for r in custo["rows"] if "claude" in r["model"])
+    assert claude["cost_usd"] is None and claude["price_source"] is None
+    assert custo["complete"] is False, "total precisa se declarar incompleto quando falta preço"
+    assert abs(custo["total_usd"] - esperado) < 1e-6
+    assert estimate_cost({}, tabela_teste)["complete"] is True
+
     print("self-test ok")
     return 0
 
@@ -5454,6 +5700,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--port", type=int, default=8765)
     p_ui.add_argument("--base", default=str(Path.cwd()), help="pasta base para listar .srt e trabalhos")
     p_ui.set_defaults(func=serve_ui)
+
+    p_precos = sub.add_parser("refresh-prices", help="busca precos do Bedrock na API da AWS")
+    p_precos.add_argument("--profile", default=DEFAULT_PROFILE)
+    p_precos.add_argument("--region", default=DEFAULT_REGION)
+    p_precos.add_argument("--models", default=None)
+    p_precos.add_argument("--call-timeout", type=int, default=300)
+    p_precos.set_defaults(func=refresh_prices_cli)
 
     p_models = sub.add_parser("list-models", help="lista inference profiles úteis do Bedrock")
     p_models.add_argument("--profile", default=DEFAULT_PROFILE)

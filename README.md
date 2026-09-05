@@ -314,6 +314,33 @@ ordem de grandeza: um filme de cerca de 2.400 legendas consumiu por volta de 800
 tokens no total, entre entrada e saída, usando Claude Sonnet como modelo principal.
 `--polish-pass` praticamente dobra isso.
 
+A interface mostra o consumo **por modelo** — chamadas, tokens de entrada, tokens servidos
+do cache e tokens de saída — com o custo estimado em dólar ao lado.
+
+Os preços vêm, nesta ordem: do que você definir em `srt_translator.local.json`, do que o
+comando abaixo buscar na API de preços da AWS, e por último de um instantâneo embutido. A
+tabela sempre diz de onde veio cada preço, para estimativa nunca passar por número oficial.
+
+```bash
+python3 srt_bedrock_translator.py refresh-prices
+```
+
+**A API de preços da AWS não publica os modelos Claude 4.x.** Eles aparecem como *sem preço*
+e o total sai com um sinal de mais, avisando que está incompleto. Para completar, consulte a
+[página de preços do Bedrock](https://aws.amazon.com/bedrock/pricing/) e informe os valores,
+por mil tokens:
+
+```json
+{
+  "prices": {
+    "us.anthropic.claude-sonnet-4-6": {
+      "input": 0.003, "output": 0.015,
+      "cache_read": 0.0003, "cache_write": 0.00375
+    }
+  }
+}
+```
+
 ## Comandos auxiliares
 
 ```bash
