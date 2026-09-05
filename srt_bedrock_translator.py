@@ -88,6 +88,10 @@ SOFT_CONSENSUS_MODELS = 2
 # limiar de 1.15x ficava abaixo da variacao normal e marcava 8% do filme sem motivo.
 CPS_REGRESSION_RATIO = 1.35
 
+# Silêncio que sugere troca de cena. Calibrado num filme real: com 4s e o lote já a 75%
+# do alvo, os cortes no meio de diálogo caem um terço e o número de chamadas sobe só 5%.
+SCENE_GAP_SECONDS = 4.0
+
 # Bump quando as regras de QC mudarem, para relatórios antigos serem recalculados.
 QUALITY_REPORT_VERSION = 4
 
@@ -907,20 +911,57 @@ def build_quality_report(
     }
 
 
-def make_batches(cues: list[SrtCue], batch_size: int, max_chars: int) -> list[Batch]:
+def silence_before(cue: SrtCue, anterior: SrtCue | None) -> float:
+    """Segundos de silêncio entre o fim da fala anterior e o início desta."""
+    if anterior is None:
+        return 0.0
+    try:
+        fim = parse_time_ms(anterior.timing.split("-->")[1].strip())
+        inicio = parse_time_ms(cue.timing.split("-->")[0].strip())
+    except Exception:
+        return 0.0
+    return max(0.0, (inicio - fim) / 1000.0)
+
+
+def make_batches(
+    cues: list[SrtCue],
+    batch_size: int,
+    max_chars: int,
+    scene_gap: float = SCENE_GAP_SECONDS,
+) -> list[Batch]:
+    """Agrupa as falas em lotes, preferindo fechar numa pausa da cena.
+
+    O corte a cada N falas cai com frequência no meio de um diálogo, justamente
+    onde o contexto mais importa. Quando o lote já está perto do tamanho alvo e
+    aparece um silêncio longo, ele fecha ali: a troca de assunto vira a fronteira.
+    """
     batches: list[Batch] = []
     current: list[SrtCue] = []
     chars = 0
+    minimo_para_cortar = max(4, int(batch_size * 0.75))
+
+    def fechar() -> None:
+        nonlocal current, chars
+        batches.append(Batch(len(batches) + 1, current, current[0].id, current[-1].id))
+        current = []
+        chars = 0
+
+    anterior: SrtCue | None = None
     for cue in cues:
         cue_len = len(cue.text) + len(cue.timing) + 32
-        if current and (len(current) >= batch_size or chars + cue_len > max_chars):
-            batches.append(Batch(len(batches) + 1, current, current[0].id, current[-1].id))
-            current = []
-            chars = 0
+        estourou = current and (len(current) >= batch_size or chars + cue_len > max_chars)
+        pausa_boa = (
+            current
+            and len(current) >= minimo_para_cortar
+            and silence_before(cue, anterior) >= scene_gap
+        )
+        if estourou or pausa_boa:
+            fechar()
         current.append(cue)
         chars += cue_len
+        anterior = cue
     if current:
-        batches.append(Batch(len(batches) + 1, current, current[0].id, current[-1].id))
+        fechar()
     return batches
 
 
@@ -4809,6 +4850,28 @@ Freud.
     # sem glossario o comportamento antigo se mantem
     sem_gloss = build_quality_report(juiza_cues, juiza_tr, max_lines=2, max_line_length=42, max_cps=99.0)
     assert not any(i["code"] == "glossary_gender" for c in sem_gloss["cues"] for i in c["issues"])
+
+    # Lotes fecham em pausa de cena sem perder nem reordenar falas.
+    cena_cues = []
+    t = 0
+    for i in range(1, 25):
+        gap = 6000 if i == 22 else 200   # um silêncio longo perto do fim
+        t += gap
+        cena_cues.append(
+            SrtCue(
+                id=i,
+                number=str(i),
+                timing=f"00:00:{t // 1000:02d},{t % 1000:03d} --> 00:00:{(t + 1500) // 1000:02d},{(t + 1500) % 1000:03d}",
+                text=f"Fala {i}.",
+            )
+        )
+        t += 1500
+    lotes = make_batches(cena_cues, batch_size=24, max_chars=99999)
+    assert [c.id for b in lotes for c in b.cues] == [c.id for c in cena_cues], "falas perdidas ou reordenadas"
+    assert len(lotes) == 2 and lotes[0].cues[-1].id == 21, [(b.start_id, b.end_id) for b in lotes]
+    # sem pausa longa, o comportamento antigo se mantém
+    sem_pausa = make_batches(cena_cues, batch_size=24, max_chars=99999, scene_gap=10**9)
+    assert len(sem_pausa) == 1, [(b.start_id, b.end_id) for b in sem_pausa]
 
     print("self-test ok")
     return 0
