@@ -17,3 +17,6 @@ venv/
 *.mov
 *.avi
 *.zip
+
+# preferencias desta maquina (profile AWS, regiao) - nunca versionar
+srt_translator.local.json

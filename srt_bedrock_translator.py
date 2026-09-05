@@ -35,8 +35,38 @@ from urllib.parse import parse_qs, urlparse
 
 
 APP_NAME = "SRT Bedrock Translator"
-DEFAULT_PROFILE = "default"
-DEFAULT_REGION = "us-east-1"
+LOCAL_CONFIG_NAME = "srt_translator.local.json"
+
+
+def local_defaults() -> dict[str, Any]:
+    """Le preferencias da maquina, para o repositorio nao carregar dado de ninguem.
+
+    Ordem: $SRT_TRANSLATOR_CONFIG, arquivo ao lado do script, depois ~/.config.
+    O arquivo ao lado do script esta no .gitignore de proposito.
+    """
+    candidates = [
+        os.environ.get("SRT_TRANSLATOR_CONFIG"),
+        str(Path(__file__).resolve().parent / LOCAL_CONFIG_NAME),
+        str(Path.home() / ".config" / "srt-bedrock-translator" / "config.json"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+LOCAL_DEFAULTS = local_defaults()
+DEFAULT_PROFILE = os.environ.get("AWS_PROFILE") or LOCAL_DEFAULTS.get("profile") or "default"
+DEFAULT_REGION = os.environ.get("AWS_REGION") or LOCAL_DEFAULTS.get("region") or "us-east-1"
 DEFAULT_MODELS = [
     "us.anthropic.claude-sonnet-4-6",
     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -2515,7 +2545,7 @@ class UIHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            self.send_html(UI_HTML)
+            self.send_html(render_ui_html())
             return
         if parsed.path == "/api/files":
             self.send_json({"files": list_srt_files(self.base)})
@@ -3104,11 +3134,11 @@ UI_HTML = r"""<!doctype html>
         <div class="row">
           <div>
             <label class="field-label" for="profile">AWS profile <button class="info" data-help="profile" aria-label="Ajuda">i</button></label>
-            <input id="profile" value="default">
+            <input id="profile" value="__DEFAULT_PROFILE__">
           </div>
           <div>
             <label class="field-label" for="region">Regiao <button class="info" data-help="region" aria-label="Ajuda">i</button></label>
-            <input id="region" value="us-east-1">
+            <input id="region" value="__DEFAULT_REGION__">
           </div>
         </div>
 
@@ -3247,7 +3277,7 @@ UI_HTML = r"""<!doctype html>
       path: {
         t: "Ou caminho absoluto",
         p: "O endereco completo de uma legenda que nao esta na pasta acima. Se voce escrever algo aqui, este campo manda e a escolha do campo de cima e ignorada.",
-        e: "Para traduzir algo que esta em Downloads, cole <code>/Users/seu-usuario/Downloads/Filme.srt</code>. Atalho util: no Finder, clique no arquivo e aperte Cmd+Option+C, que copia o caminho completo pronto para colar aqui.",
+        e: "Para traduzir algo que esta em Downloads, cole algo como <code>/Users/seu-usuario/Downloads/Filme.srt</code>. Atalho util: no Finder, clique no arquivo e aperte Cmd+Option+C, que copia o caminho completo pronto para colar aqui.",
         d: "Deixe vazio no uso normal."
       },
       profile: {
@@ -3432,17 +3462,7 @@ UI_HTML = r"""<!doctype html>
       }
     };
 
-    const defaultModels = [
-      "us.anthropic.claude-sonnet-4-6",
-      "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-      "us.amazon.nova-pro-v1:0",
-      "amazon.nova-pro-v1:0",
-      "mistral.mistral-large-3-675b-instruct",
-      "amazon.nova-lite-v1:0",
-      "us.amazon.nova-lite-v1:0",
-      "mistral.mistral-small-2402-v1:0",
-      "meta.llama3-70b-instruct-v1:0"
-    ];
+    const defaultModels = __DEFAULT_MODELS__;
     let selectedJob = null;
     let lastStatus = {};
     let lastDone = null;
@@ -3874,6 +3894,15 @@ UI_HTML = r"""<!doctype html>
 </body>
 </html>
 """
+
+
+def render_ui_html() -> str:
+    """Injeta os padroes desta maquina na pagina, para o HTML nao guardar nada pessoal."""
+    return (
+        UI_HTML.replace("__DEFAULT_PROFILE__", html.escape(DEFAULT_PROFILE, quote=True))
+        .replace("__DEFAULT_REGION__", html.escape(DEFAULT_REGION, quote=True))
+        .replace("__DEFAULT_MODELS__", json.dumps(DEFAULT_MODELS, ensure_ascii=False))
+    )
 
 
 def serve_ui(args: argparse.Namespace) -> None:
