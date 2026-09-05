@@ -39,7 +39,6 @@ Traduzir legenda parece simples até você tentar num filme inteiro. O que quebr
 | A resposta vem cortada ou fora do formato | A tradução é pedida como ferramenta, então a API devolve estrutura já validada; o que ainda escapar é validado aqui, com o motivo da recusa realimentado na tentativa seguinte |
 | Cai a internet no bloco 60 de 87 | O progresso está em disco; retomar continua do 61 sem retraduzir nem cobrar de novo |
 | Sobra um trecho sem traduzir e você só descobre assistindo | Controle de qualidade local e o resultado estampado no nome do arquivo |
-| A tradução está em português perfeito mas diz outra coisa, e nenhuma checagem estrutural vê | Um segundo modelo julga o sentido das falas de risco; erro confirmado por dois modelos é refeito, com o texto anterior guardado |
 | Refrão de música devia ficar igual, mas a validação acha que é erro | Dois modelos concordando no mesmo texto derrubam a suspeita, em vez de travar |
 
 Sem dependências: só a biblioteca padrão do Python e o AWS CLI.
@@ -248,30 +247,29 @@ A parte do prompt que não muda entre blocos — regras, guia do filme e glossá
 num prefixo em cache, cobrado a cerca de um décimo nas chamadas seguintes. Num filme de
 duas horas isso é perto de um terço da entrada, e entrada é o que domina o custo aqui.
 
-### Revisão de sentido
+### Revisão de sentido (desligada por padrão)
 
-As checagens acima são todas estruturais: tag, símbolo de música, linha, velocidade. Nenhuma
-delas percebe um erro escrito em português impecável. `I have no authority to deal` virando
-"não tenho autoridade para isso" perde o sentido jurídico de negociar acordo e passa por tudo.
+As checagens acima são todas estruturais e nenhuma delas percebe um erro escrito em
+português impecável. Existe um passe que procura exatamente isso: um segundo modelo relê
+pares de original e tradução e aponta onde o sentido está errado.
 
-Depois de traduzir, um segundo modelo lê pares de original e tradução e aponta **só** onde o
-sentido está errado. Por padrão ele revisa o **filme inteiro**, o que custa cerca de 30% a mais
-e não deixa erro escapar. Para baratear, `--semantic-min-signals 1` restringe às falas com
-sinal de risco — negação, contraste, modal, número, variação grande de tamanho — mais uma
-amostra aleatória, por volta de 10% a mais.
+**Ele vem desligado, e a medição explica por quê.** Rodado sobre 400 falas de um filme já
+traduzido, o funil foi: 17 apontadas, 8 sobreviveram aos filtros, 3 confirmadas por um
+segundo modelo. Dessas 3, uma era melhoria real, uma era discutível e **uma teria piorado a
+legenda** — o juiz quis trocar "Discorde à vontade" por "Implore à vontade" sem perceber que
+a fala anterior fora traduzida como "Discordo respeitosamente" e que o trocadilho morreria.
 
-A fala acusada é refeita **sozinha**, com as vizinhas entrando apenas como leitura. Refazer o
-lote inteiro para consertar uma linha re-sortearia dezenas de traduções que estavam boas: numa
-medição, 60 falas marcadas fariam 60% do filme ser retraduzido.
+No filme inteiro isso custa cerca de **40% a mais** para render em torno de uma melhoria
+real a cada 400 falas, com risco comparável de estragar o que estava certo.
 
-Um juiz sozinho erra muito: numa amostra real, metade das acusações era ruído, e ele chegou a
-marcar "errado" e explicar em seguida que o sentido estava preservado. Por isso a acusação só
-vira ação se sobreviver a três filtros — veredito decidido, sugestão concreta e diferente, e
-nenhum recuo no próprio texto — e ainda for confirmada por um segundo modelo. Só então a fala
-é refeita, levando a crítica junto. O texto anterior fica guardado e a fala aparece no contador
-`revisar` para você conferir.
+```bash
+python3 srt_bedrock_translator.py translate "arquivo.srt" --semantic-review
+```
 
-Desligue com `--no-semantic-review`.
+Ligada, ela apenas **relata**: as falas apontadas aparecem no contador `revisar` para você
+conferir. Para deixá-la reescrever sozinha, acrescente `--semantic-autofix` — sabendo do
+caso acima. Restrinja o custo com `--semantic-min-signals 1`, que limita às falas com sinal
+de risco, mas atenção: na medição, 2 das 3 confirmadas não tinham sinal nenhum.
 
 **Gênero.** O guia registra o gênero de cada pessoa e de cada forma de tratamento, porque
 o inglês não marca e o português obriga a escolher. Sem isso a mesma personagem muda de

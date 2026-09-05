@@ -413,8 +413,9 @@ class JobConfig:
     polish_pass: bool = False
     retry_qc_issues: bool = True
     qc_repair_rounds: int = 2
-    semantic_review: bool = True
+    semantic_review: bool = False
     semantic_min_signals: int = 0
+    semantic_autofix: bool = False
     semantic_budget: int = 100000
     semantic_sample_pct: float = 0.10
     max_lines: int = 2
@@ -1956,7 +1957,7 @@ class TranslatorJob:
                 self.repair_quality_issues(client, state)
             if self.config.semantic_review:
                 confirmados = self.semantic_review(client, state)
-                if confirmados:
+                if confirmados and self.config.semantic_autofix:
                     mudou = self.repair_semantic_cues(client, state, confirmados)
                     self.write_quality_report(state)
                     self.save_state(state)
@@ -2304,8 +2305,10 @@ class TranslatorJob:
                 rec = self.translations[str(cue_id)]
                 rec["semantic_note"] = str(item.get("porque", ""))[:400]
                 rec["semantic_category"] = str(item.get("categoria", ""))[:60]
-                rec["text_before_review"] = atual
-                rec["status"] = "needs_review"
+                rec["review_flag"] = "sentido_suspeito"
+                if self.config.semantic_autofix:
+                    rec["text_before_review"] = atual
+                    rec["status"] = "needs_review"
                 confirmados.append(cue_id)
         self.save_translations()
         self.logger.event(
@@ -3077,7 +3080,8 @@ def build_config_from_args(args: argparse.Namespace) -> JobConfig:
         polish_pass=getattr(args, "polish_pass", False),
         retry_qc_issues=not getattr(args, "no_retry_qc_issues", False),
         qc_repair_rounds=getattr(args, "qc_repair_rounds", 2),
-        semantic_review=bool(getattr(args, "semantic_review", True)),
+        semantic_review=bool(getattr(args, "semantic_review", False)),
+        semantic_autofix=bool(getattr(args, "semantic_autofix", False)),
         semantic_min_signals=int(getattr(args, "semantic_min_signals", 0) or 0),
         semantic_budget=int(getattr(args, "semantic_budget", 100000) or 100000),
         semantic_sample_pct=float(getattr(args, "semantic_sample_pct", 0.10) or 0.0),
@@ -3513,7 +3517,8 @@ class UIHandler(BaseHTTPRequestHandler):
                     polish_pass=bool(data.get("polish_pass", False)),
                     retry_qc_issues=bool(data.get("retry_qc_issues", True)),
                     qc_repair_rounds=int(data.get("qc_repair_rounds") or 2),
-                    semantic_review=bool(data.get("semantic_review", True)),
+                    semantic_review=bool(data.get("semantic_review", False)),
+                    semantic_autofix=bool(data.get("semantic_autofix", False)),
                     max_lines=int(data.get("max_lines") or 2),
                     max_line_length=int(data.get("max_line_length") or 42),
                     max_cps=float(data.get("max_cps") or 17.0),
@@ -3548,7 +3553,8 @@ class UIHandler(BaseHTTPRequestHandler):
                     polish_pass=bool(data.get("polish_pass", state.get("polish_pass", False))),
                     retry_qc_issues=bool(data.get("retry_qc_issues", state.get("retry_qc_issues", True))),
                     qc_repair_rounds=int(data.get("qc_repair_rounds") or state.get("qc_repair_rounds") or 2),
-                    semantic_review=bool(data.get("semantic_review", True)),
+                    semantic_review=bool(data.get("semantic_review", False)),
+                    semantic_autofix=bool(data.get("semantic_autofix", False)),
                     max_lines=int(data.get("max_lines") or state.get("max_lines") or 2),
                     max_line_length=int(data.get("max_line_length") or state.get("max_line_length") or 42),
                     max_cps=float(data.get("max_cps") or state.get("max_cps") or 17.0),
@@ -4181,7 +4187,7 @@ UI_HTML = r"""<!doctype html>
         <label class="toggle-row"><input id="retryForever" type="checkbox" checked> <span>Retentar até concluir ou parar manualmente</span> <button class="info" data-help="retryForever" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="retryQc" type="checkbox" checked> <span>Refazer automaticamente cues com erro duro de QC</span> <button class="info" data-help="retryQc" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="contextPass" type="checkbox" checked> <span>Criar guia de contexto antes de traduzir</span> <button class="info" data-help="contextPass" aria-label="Ajuda">i</button></label>
-        <label class="toggle-row"><input id="semanticReview" type="checkbox" checked> <span>Revisar o sentido com um segundo modelo</span> <button class="info" data-help="semanticReview" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="semanticReview" type="checkbox"> <span>Revisar o sentido com um segundo modelo</span> <button class="info" data-help="semanticReview" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="polishPass" type="checkbox"> <span>Rodar passe final de revisão</span> <button class="info" data-help="polishPass" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="forceNew" type="checkbox"> <span>Criar trabalho novo mesmo se já existir estado</span> <button class="info" data-help="forceNew" aria-label="Ajuda">i</button></label>
 
@@ -4371,9 +4377,9 @@ UI_HTML = r"""<!doctype html>
       },
       semanticReview: {
         t: "Revisar o sentido com um segundo modelo",
-        p: "Depois de traduzir, um segundo modelo lê pares de original e tradução e aponta só onde o SENTIDO ficou errado. Não é revisão de estilo: é a única checagem que enxerga um erro escrito em português perfeito.",
-        e: "As checagens normais olham tag, símbolo de música, linha e velocidade. Nenhuma delas percebe que <code>I have no authority to deal</code> virou <i>não tenho autoridade para isso</i>, perdendo o sentido jurídico de negociar acordo. Esta revisão percebe.<br><br>Ela não julga o filme inteiro: escolhe as falas com sinal de risco, como negação, contraste, número e mudança grande de tamanho, que foi onde os erros reais apareceram. E não age sozinha na primeira acusação: um juiz só erra muito, então a acusação precisa ser confirmada por um segundo modelo antes de a fala ser refeita. O texto anterior fica guardado.",
-        d: "Deixe ligado. Custa cerca de 10% a mais e pega o que mais nada pega."
+        p: "Depois de traduzir, um segundo modelo relê os pares original/tradução procurando erro de significado — o tipo de erro escrito em português impecável, que nenhuma outra checagem enxerga. Vem desligado, e a razão está no exemplo abaixo.",
+        e: "<b>Medido num filme real, em 400 falas:</b> o juiz apontou 17, sobraram 8 depois dos filtros, e 3 foram confirmadas por um segundo modelo. Dessas 3, uma era melhoria de verdade, uma era discutível e <b>uma pioraria a legenda</b>: ele quis trocar <i>Discorde à vontade</i> por <i>Implore à vontade</i>, sem perceber que a fala anterior tinha sido traduzida como <i>Discordo respeitosamente</i> e que o trocadilho se perderia.<br><br>Custa cerca de 40% a mais no filme inteiro. Ligue quando a legenda for para valer e você mesmo for conferir a lista; as falas apontadas aparecem no contador <b>revisar</b>. Ela só relata: para deixá-la reescrever sozinha é preciso <code>--semantic-autofix</code>, e aí o risco daquela terceira correção é seu.",
+        d: "Deixe desligado no uso normal. O ganho medido não paga os 40%."
       },
       polishPass: {
         t: "Rodar passe final de revisão",
@@ -5401,8 +5407,9 @@ Freud.
 
     # Revisão total é o padrão; o usuário barateia subindo o limiar.
     padrao = JobConfig(source_path=Path("x.srt"))
-    assert padrao.semantic_review is True
-    assert padrao.semantic_min_signals == 0, "revisão total deve ser o padrão"
+    assert padrao.semantic_review is False, "revisão de sentido não deve vir ligada"
+    assert padrao.semantic_autofix is False, "reescrita automática não deve vir ligada"
+    assert padrao.semantic_min_signals == 0, "quando ligada, cobre o filme todo"
     # com limiar 0 tudo entra, com limiar 1 só o que tem sinal
     todos, _ = select_for_semantic_review(risco_cues, risco_tr, min_signals=0, sample_pct=0)
     assert todos == [1, 2], todos
@@ -5489,7 +5496,8 @@ def add_common_job_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-context-pass", action="store_true")
     parser.add_argument("--polish-pass", action="store_true", help="roda um segundo passe de revisão")
     parser.add_argument("--no-retry-qc-issues", action="store_true", help="não refaz automaticamente cues que falham no QC duro")
-    parser.add_argument("--no-semantic-review", dest="semantic_review", action="store_false", help="desliga a revisao de sentido por LLM")
+    parser.add_argument("--semantic-review", dest="semantic_review", action="store_true", help="liga a revisao de sentido por LLM: um segundo modelo procura erro de significado. Custa ~40%% a mais e, medido num filme real, aponta pouca coisa util")
+    parser.add_argument("--semantic-autofix", dest="semantic_autofix", action="store_true", help="alem de relatar, reescreve as falas acusadas. Use com cuidado: numa medicao, uma das tres correcoes confirmadas piorava a legenda")
     parser.add_argument("--semantic-min-signals", type=int, default=0, help="sinais de risco para entrar na revisao de sentido")
     parser.add_argument("--semantic-sample-pct", type=float, default=0.10, help="fracao sorteada alem das falas de risco")
     parser.add_argument("--semantic-budget", type=int, default=100000, help="teto de falas enviadas a revisao de sentido")
