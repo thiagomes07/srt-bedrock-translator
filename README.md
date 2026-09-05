@@ -64,6 +64,34 @@ O QC local verifica:
 
 Erros duros fazem o job tentar refazer os lotes afetados e impedem a saida `.OK.srt`. Avisos de legibilidade ficam no relatorio para revisao.
 
+### Quando a heuristica erra: consenso entre modelos
+
+"Possivel texto nao traduzido" e heuristica, e heuristica erra. Refrao de musica
+(`♪ Guli guli guli guli ram sam sam ♪`), onomatopeia e nome repetido sao texto que
+deve mesmo ficar igual ao original. Antes, um cue desses derrubava o lote inteiro e,
+como o retry reenviava o prompt identico, todos os modelos devolviam a mesma resposta
+e o trabalho ficava preso para sempre no mesmo lote.
+
+Hoje o fluxo e:
+
+1. a falha de heuristica e classificada como *soft*: o JSON e valido, so o texto e suspeito;
+2. cada retry leva no prompt o motivo da recusa e os IDs a corrigir;
+3. se dois modelos diferentes devolvem exatamente os mesmos IDs suspeitos, ou se um ciclo
+   completo de modelos so falha por heuristica, a traducao e aceita e aqueles cues ficam
+   marcados como "revisar";
+4. cue aceito por consenso vira **aviso** no QC, nao erro duro, entao nao bloqueia o `.OK.srt`.
+
+Quebra estrutural continua sendo erro duro e nunca e aceita por consenso: JSON invalido,
+ID faltando ou sobrando, recusa explicita, tag desbalanceada, marcador musical perdido e
+token protegido ausente.
+
+A UI mostra o contador `revisar` e marca o lote como `lote insistindo` quando ele entra em
+segundo ciclo de modelos, para o problema aparecer na tela em vez de so no log.
+
+Ao finalizar, o job apaga a saida parcial `.EM_ANDAMENTO.srt` e a variante antiga
+(`.INCOMPLETO.srt` quando saiu `.OK.srt`, e vice-versa), para sobrar so a legenda boa na
+pasta. So remove arquivo cujo sidecar comprova que foi este job que escreveu.
+
 Para um segundo passe de revisao:
 
 ```bash
