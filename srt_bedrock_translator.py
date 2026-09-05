@@ -1346,8 +1346,20 @@ class BedrockClient:
         max_tokens: int,
         temperature: float = 0.2,
         tool_config: dict[str, Any] | None = None,
+        cache_prefix: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        messages = [{"role": "user", "content": [{"text": user_text}]}]
+        if cache_prefix:
+            # Tudo antes do cachePoint e reaproveitado entre chamadas a ~10% do custo.
+            # Ordem de renderizacao: tools, system, messages -- por isso o ponto fica
+            # logo depois da parte estavel do prompt do usuario.
+            conteudo = [
+                {"text": cache_prefix},
+                {"cachePoint": {"type": "default"}},
+                {"text": user_text},
+            ]
+        else:
+            conteudo = [{"text": user_text}]
+        messages = [{"role": "user", "content": conteudo}]
         cmd = [
             self.aws_path,
             "bedrock-runtime",
@@ -1436,7 +1448,7 @@ def make_llm_client(profile: str, region: str, timeout: int, logger: JsonLogger)
 TRANSLATION_TOOL_NAME = "entregar_traducoes"
 
 
-def translation_tool_config(ids: list[int]) -> dict[str, Any]:
+def translation_tool_config() -> dict[str, Any]:
     """Contrato de resposta como ferramenta, em vez de JSON pedido em prosa.
 
     A API valida o schema e devolve objeto pronto, o que elimina a classe de falha
@@ -1447,9 +1459,11 @@ def translation_tool_config(ids: list[int]) -> dict[str, Any]:
             {
                 "toolSpec": {
                     "name": TRANSLATION_TOOL_NAME,
+                    # Texto fixo de proposito: o toolConfig e renderizado antes do system,
+                    # entao qualquer variacao por lote invalidaria todo o prefixo em cache.
                     "description": (
-                        "Entrega a traducao em portugues brasileiro de cada legenda do lote atual. "
-                        f"Devolva exatamente um item para cada um dos {len(ids)} ids pedidos."
+                        "Entrega a traducao em portugues brasileiro das legendas do lote atual. "
+                        "Devolva exatamente um item para cada id pedido, sem faltar nem sobrar."
                     ),
                     "inputSchema": {
                         "json": {
@@ -1608,7 +1622,7 @@ class TranslatorJob:
                 "completed_batches": [],
                 "failed_batches": [],
                 "current": None,
-                "usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
+                "usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0},
                 "last_error": None,
                 "movie": infer_movie_title(self.source_path),
             }
@@ -2072,7 +2086,7 @@ class TranslatorJob:
 
     def translate_batch(self, client: BedrockClient, state: dict[str, Any], batch: Batch, *, polish: bool) -> tuple[dict[str, str], str, dict[str, Any]]:
         builder = build_polish_prompt if polish else build_translation_prompt
-        system, prompt = builder(self, batch)
+        system, prompt, cache_prefix = builder(self, batch)
         protected = protected_tokens_for_batch(self, batch)
         max_tokens = estimate_max_tokens(batch, polish=polish)
         text, meta, model, outcome = self.call_with_fallback(
@@ -2086,7 +2100,8 @@ class TranslatorJob:
             batch=batch.number,
             validator=lambda raw: validate_translation_payload(extract_json_object(raw), batch, protected),
             prompt_builder=lambda feedback: builder(self, batch, feedback=feedback),
-            tool_config=translation_tool_config([cue.id for cue in batch.cues]),
+            tool_config=translation_tool_config(),
+            cache_prefix=cache_prefix,
         )
         self.add_usage(state, meta)
         if outcome.get("soft_accepted") and outcome.get("payload"):
@@ -2110,6 +2125,7 @@ class TranslatorJob:
         max_cycles: int | None = None,
         prompt_builder: Any | None = None,
         tool_config: dict[str, Any] | None = None,
+        cache_prefix: str | None = None,
     ) -> tuple[str, dict[str, Any], str, dict[str, Any]]:
         cycle = 0
         last_error = ""
@@ -2149,12 +2165,12 @@ class TranslatorJob:
                     )
                     # Reenviar o prompt identico depois de uma falha faz o modelo repetir
                     # a mesma resposta. Cada retry carrega o motivo da recusa anterior.
-                    call_system, call_prompt = system, prompt
+                    call_system, call_prompt, call_prefix = system, prompt, cache_prefix
                     if feedback and prompt_builder is not None:
                         try:
-                            call_system, call_prompt = prompt_builder(feedback)
+                            call_system, call_prompt, call_prefix = prompt_builder(feedback)
                         except Exception:
-                            call_system, call_prompt = system, prompt
+                            call_system, call_prompt, call_prefix = system, prompt, cache_prefix
                     try:
                         raw, meta = self.converse_com_ou_sem_ferramenta(
                             client,
@@ -2164,6 +2180,7 @@ class TranslatorJob:
                             max_tokens=current_max_tokens,
                             temperature=temperature,
                             tool_config=tool_config,
+                            cache_prefix=call_prefix,
                         )
                         raw_excerpt = raw[:800]
                         if meta.get("stopReason") == "max_tokens":
@@ -2302,6 +2319,7 @@ class TranslatorJob:
         max_tokens: int,
         temperature: float,
         tool_config: dict[str, Any] | None,
+        cache_prefix: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Usa o contrato por ferramenta quando o modelo aceita.
 
@@ -2318,6 +2336,7 @@ class TranslatorJob:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 tool_config=tool_config if usar else None,
+                cache_prefix=cache_prefix,
             )
         except BedrockCallError as exc:
             if not usar or not is_tool_unsupported_error(str(exc)):
@@ -2334,6 +2353,7 @@ class TranslatorJob:
             user_text,
             max_tokens=max_tokens,
             temperature=temperature,
+            cache_prefix=cache_prefix,
         )
 
     @staticmethod
@@ -2366,8 +2386,11 @@ class TranslatorJob:
         usage = meta.get("usage") if isinstance(meta, dict) else None
         if not isinstance(usage, dict):
             return
-        total = state.setdefault("usage", {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0})
-        for key in ("inputTokens", "outputTokens", "totalTokens"):
+        total = state.setdefault(
+            "usage",
+            {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0},
+        )
+        for key in ("inputTokens", "outputTokens", "totalTokens", "cacheReadInputTokens", "cacheWriteInputTokens"):
             try:
                 total[key] = int(total.get(key, 0)) + int(usage.get(key, 0))
             except Exception:
@@ -2432,9 +2455,10 @@ def build_translation_prompt(job: TranslatorJob, batch: Batch, *, feedback: str 
         "A resposta deve comecar com {\"translations\": e terminar com }. "
         "Retorne somente JSON valido no contrato pedido."
     )
-    payload = {
+    estavel = {
         "response_format_required": 'Retorne exatamente: {"translations":[{"id":1,"text":"texto em pt-BR"}]}. A chave de topo deve ser translations.',
         "movie_context": context,
+        "glossario_decidido_use_exatamente": glossary_from_context(context),
         "batching_instructions": [
             "CONTEXTO_ANTERIOR pode trazer source e ptbr já traduzido; use para manter continuidade.",
             "LOTE_ATUAL e o único bloco que deve ser traduzido e retornado.",
@@ -2452,15 +2476,17 @@ def build_translation_prompt(job: TranslatorJob, batch: Batch, *, feedback: str 
             "Concordancia de genero: o portugues exige o que o ingles omite. Quem fala define obrigado ou obrigada; quem e descrito define cansado ou cansada. Use o gender do glossario e o contexto anterior para decidir, e mantenha a escolha estavel.",
             "Não resuma, não censure, não explique.",
         ],
+    }
+    volatil = {
         "protected_tokens_by_id": protected,
-        "glossario_decidido_use_exatamente": glossary_from_context(context),
         "previous_context_source_and_ptbr": prev_items,
         "current_batch_translate_this": [cue.as_prompt_item(include_time=True) for cue in batch.cues],
         "next_context_source_only": next_items,
     }
     if feedback:
-        payload["retry_feedback_fix_this_first"] = feedback
-    return system, prompt_json(payload)
+        volatil["retry_feedback_fix_this_first"] = feedback
+    # A parte estavel e identica em todos os lotes do filme, entao vira prefixo de cache.
+    return system, prompt_json(volatil), prompt_json(estavel)
 
 
 def build_polish_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "") -> tuple[str, str]:
@@ -2503,7 +2529,7 @@ def build_polish_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "")
     }
     if feedback:
         payload["retry_feedback_fix_this_first"] = feedback
-    return system, prompt_json(payload)
+    return system, prompt_json(payload), None
 
 
 def estimate_max_tokens(batch: Batch, *, polish: bool = False) -> int:
@@ -4321,7 +4347,7 @@ UI_HTML = r"""<!doctype html>
         pathLine("Original", job.source_path) +
         pathLine("Traduzida", job.final_output_path || job.last_written_output) +
         pathLine("Relatório", job.quality_report_path) +
-        `<div class="pathline"><span class="pk">Números</span><span class="pv">${done}/${total} traduzidas &middot; ${job.pending_cues || q.pending_cues || 0} pendentes &middot; ${job.error_cues || 0} erros &middot; ${job.warning_cues || q.warning_cues || 0} avisos${usage.totalTokens ? ` &middot; ${Number(usage.totalTokens).toLocaleString("pt-BR")} tokens` : ""}</span></div>`;
+        `<div class="pathline"><span class="pk">Números</span><span class="pv">${done}/${total} traduzidas &middot; ${job.pending_cues || q.pending_cues || 0} pendentes &middot; ${job.error_cues || 0} erros &middot; ${job.warning_cues || q.warning_cues || 0} avisos${usage.totalTokens ? ` &middot; ${Number(usage.totalTokens).toLocaleString("pt-BR")} tokens` : ""}${usage.cacheReadInputTokens ? ` (${Number(usage.cacheReadInputTokens).toLocaleString("pt-BR")} reaproveitados do cache)` : ""}</span></div>`;
 
       const err = document.querySelector("#lastError");
       const showErr = job.last_error && job.status !== "complete";
@@ -4741,7 +4767,7 @@ Freud.
     assert inherited_report["report_version"] == QUALITY_REPORT_VERSION
 
     # Contrato por ferramenta: schema exige um item por id, com id e texto.
-    tool = translation_tool_config([1, 2, 3])
+    tool = translation_tool_config()
     schema = tool["tools"][0]["toolSpec"]["inputSchema"]["json"]
     assert tool["toolChoice"]["tool"]["name"] == TRANSLATION_TOOL_NAME
     assert schema["properties"]["translations"]["items"]["required"] == ["id", "text"]
