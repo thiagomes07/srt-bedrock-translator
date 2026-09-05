@@ -2518,8 +2518,12 @@ def load_source_doc_cached(path: Path) -> "SrtDocument | None":
     return doc
 
 
-def compare_recent(state: dict[str, Any], translations: dict[str, Any], limit: int = 60) -> list[dict[str, Any]]:
-    """Ultimas falas ja traduzidas, com fonte e traducao lado a lado."""
+def compare_recent(state: dict[str, Any], translations: dict[str, Any], limit: int | None = 60) -> list[dict[str, Any]]:
+    """Falas ja traduzidas, com fonte e traducao lado a lado.
+
+    `limit` recorta as ultimas N para o acompanhamento ao vivo; `None` devolve o
+    filme inteiro, usado pelo endpoint sob demanda para nao inflar cada polling.
+    """
     src = state.get("source_path")
     if not src:
         return []
@@ -2541,7 +2545,7 @@ def compare_recent(state: dict[str, Any], translations: dict[str, Any], limit: i
             "translation": str(rec.get("text", "")),
             "review": bool(rec.get("review_flag")),
         }
-        for cue, rec in done[-limit:]
+        for cue, rec in (done if limit is None else done[-limit:])
     ]
 
 
@@ -2624,6 +2628,18 @@ class UIHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "job not found"}, 404)
                 return
             self.send_json({"job": state_for_job_dir(job_dir)})
+            return
+        if parsed.path == "/api/compare":
+            qs = parse_qs(parsed.query)
+            job_id = (qs.get("id") or [""])[0]
+            job_dir = find_job_dir(self.base, job_id)
+            if not job_dir:
+                self.send_json({"error": "job not found"}, 404)
+                return
+            state = load_json(job_dir / "state.json", {})
+            translations = load_json(job_dir / "translations.json", {})
+            items = compare_recent(state, translations, limit=None)
+            self.send_json({"items": items, "total": len(items)})
             return
         self.send_json({"error": "not found"}, 404)
 
@@ -3161,7 +3177,10 @@ UI_HTML = r"""<!doctype html>
       color: var(--muted);
       margin: 0;
     }
-    .compare-head .mini input { width: auto; }
+    .compare-head .mini input[type=checkbox] { width: auto; }
+    .compare-head .mini input[type=search] { width: 190px; padding: 4px 8px; font-size: 12px; }
+    .compare-head .mini select { width: auto; padding: 4px 8px; font-size: 12px; }
+    .compare-head #cmpCount { font-weight: 700; color: var(--muted); }
     .compare-head .spacer { flex: 1; }
     .compare {
       height: 300px;
@@ -3380,8 +3399,11 @@ UI_HTML = r"""<!doctype html>
         <div class="compare-head">
           <span>Comparar traducao <button class="info" data-help="comparar" aria-label="Ajuda">i</button></span>
           <span class="spacer"></span>
-          <label class="mini"><input type="checkbox" id="cmpFollow" checked> acompanhar o mais recente</label>
-          <label class="mini"><input type="checkbox" id="cmpReview"> so as marcadas para revisao</label>
+          <label class="mini"><select id="cmpScope"><option value="live">ultimas 60 (ao vivo)</option><option value="all">filme inteiro</option></select></label>
+          <label class="mini"><input id="cmpSearch" type="search" placeholder="buscar no texto..." autocomplete="off"></label>
+          <label class="mini"><input type="checkbox" id="cmpFollow" checked> acompanhar</label>
+          <label class="mini"><input type="checkbox" id="cmpReview"> so revisar</label>
+          <span class="mini" id="cmpCount"></span>
         </div>
         <div id="compare" class="compare"></div>
       </div>
@@ -3589,8 +3611,8 @@ UI_HTML = r"""<!doctype html>
       },
       comparar: {
         t: "Comparar traducao",
-        p: "As falas que ja foram traduzidas, com o original a esquerda e o portugues a direita, para voce ir conferindo a qualidade enquanto o trabalho roda.",
-        e: "A lista se atualiza sozinha a cada lote que fecha e mostra as ultimas 60 falas. Marque <b>so as marcadas para revisao</b> para ver apenas aquelas que dois modelos devolveram iguais ao original, que sao as unicas que valem uma conferida manual. Se voce rolar para cima para ler algo, o acompanhamento automatico desliga sozinho e volta quando voce chegar no fim de novo.",
+        p: "As falas ja traduzidas em tres colunas: numero e tempo na estreita da esquerda, o texto original no meio e o portugues a direita. E aqui que voce julga se a traducao esta boa, sem precisar abrir o arquivo.",
+        e: "<b>Ultimas 60 (ao vivo)</b> acompanha o trabalho acontecendo: a lista se atualiza a cada lote que fecha e gruda na fala mais recente. <b>Filme inteiro</b> carrega todas as falas ja traduzidas para voce navegar e revisar do comeco ao fim.<br><br>A busca filtra pelo texto nos dois idiomas, entao da para procurar um nome ou uma expressao e ver como ela ficou em todas as vezes que aparece. <b>So revisar</b> mostra apenas as falas que dois modelos devolveram iguais ao original, que sao as unicas que pedem olho humano.<br><br>Se voce rolar para cima para ler algo, o acompanhamento automatico desliga sozinho e volta quando voce chegar no fim de novo.",
         d: "So olhe. E o melhor lugar para julgar se a traducao esta boa."
       },
       preview: {
@@ -3989,15 +4011,51 @@ UI_HTML = r"""<!doctype html>
       preview.innerHTML = items.length ? items.map(renderCue).join("") : "<div class='empty'>Sem lote ativo no momento.</div>";
       renderCompare(job);
     }
+    let fullCompare = null;      // lista completa, buscada sob demanda
+    let fullCompareDone = -1;    // quantas falas existiam quando ela foi buscada
+
+    async function ensureFullCompare(job) {
+      const done = job.done_cues || 0;
+      if (fullCompare && fullCompareDone === done) return fullCompare;
+      const data = await api("/api/compare?id=" + encodeURIComponent(job.job_id));
+      fullCompare = data.items || [];
+      fullCompareDone = done;
+      return fullCompare;
+    }
+
     function renderCompare(job) {
-      const all = job.compare || [];
+      const scope = document.querySelector("#cmpScope").value;
+      if (scope === "all") {
+        // busca a lista inteira uma vez e so refaz quando o numero de falas muda,
+        // para nao mandar o filme todo a cada polling
+        ensureFullCompare(job)
+          .then(items => paintCompare(items, job, true))
+          .catch(() => paintCompare(job.compare || [], job, false));
+        return;
+      }
+      fullCompare = null;
+      fullCompareDone = -1;
+      paintCompare(job.compare || [], job, false);
+    }
+
+    function paintCompare(all, job, isFull) {
       const onlyReview = document.querySelector("#cmpReview").checked;
-      const list = onlyReview ? all.filter(i => i.review) : all;
+      const term = document.querySelector("#cmpSearch").value.trim().toLowerCase();
+      let list = onlyReview ? all.filter(i => i.review) : all;
+      if (term) {
+        list = list.filter(i =>
+          (i.source || "").toLowerCase().includes(term) ||
+          (i.translation || "").toLowerCase().includes(term));
+      }
       const box = document.querySelector("#compare");
-      const follow = document.querySelector("#cmpFollow").checked;
+      const follow = document.querySelector("#cmpFollow").checked && !term;
+      document.querySelector("#cmpCount").textContent =
+        list.length ? `${list.length} de ${all.length} falas` : "";
       if (!list.length) {
         box.innerHTML = "<div class='empty' style='padding:12px'>" +
-          (onlyReview ? "Nenhuma fala marcada para revisao." : "Nada traduzido ainda. As falas aparecem aqui conforme cada lote fecha.") +
+          (term ? "Nada encontrado para essa busca."
+                : onlyReview ? "Nenhuma fala marcada para revisao."
+                : "Nada traduzido ainda. As falas aparecem aqui conforme cada lote fecha.") +
           "</div>";
         return;
       }
@@ -4009,6 +4067,7 @@ UI_HTML = r"""<!doctype html>
         </div>`).join("");
       if (follow) box.scrollTop = box.scrollHeight;
     }
+
     function renderCue(item) {
       const st = item.status || "";
       return `<div class="cue">
@@ -4040,6 +4099,16 @@ UI_HTML = r"""<!doctype html>
       finally { busy("#refresh", false); }
     };
     document.querySelector("#cmpReview").onchange = () => refreshJob().catch(() => {});
+    document.querySelector("#cmpScope").onchange = () => {
+      // trocar de escopo desliga o acompanhamento: quem pediu o filme inteiro quer navegar
+      if (document.querySelector("#cmpScope").value === "all") document.querySelector("#cmpFollow").checked = false;
+      refreshJob().catch(() => {});
+    };
+    let buscaTimer = null;
+    document.querySelector("#cmpSearch").oninput = () => {
+      clearTimeout(buscaTimer);
+      buscaTimer = setTimeout(() => refreshJob().catch(() => {}), 220);
+    };
     document.querySelector("#compare").addEventListener("scroll", ev => {
       const box = ev.target;
       const noFim = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
