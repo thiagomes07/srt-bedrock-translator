@@ -1,29 +1,59 @@
 # SRT Bedrock Translator
 
-Traduz legendas `.srt` para português brasileiro usando os modelos do Amazon Bedrock.
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Dependências](https://img.shields.io/badge/depend%C3%AAncias-zero-16833a)
+![Licença](https://img.shields.io/badge/licen%C3%A7a-MIT-1f6feb)
+![PRs](https://img.shields.io/badge/PRs-bem--vindos-6842c2)
 
-Não é tradução linha a linha: a legenda é traduzida em blocos, cada bloco enxerga o
-anterior e o seguinte, e um guia do filme gerado no início mantém nomes, tom e formas de
-tratamento coerentes do começo ao fim. Um filme de duas horas leva alguns minutos.
+Traduz legendas `.srt` para português brasileiro com LLMs, feito para não te deixar na
+mão: retoma de onde parou, nunca desiste em silêncio e diz no nome do arquivo se o
+resultado ficou bom.
 
-O que ele resolve, além de traduzir:
+Sai da caixa com Amazon Bedrock, mas o ponto de integração é **uma única classe** — dá
+para trocar por OpenAI, Anthropic, Gemini ou Ollama com uma chave de API.
+[Veja como](#usar-com-outra-llm-em-vez-do-bedrock).
 
-- **Retoma de onde parou.** Fechou o notebook, caiu a internet, matou o processo: o
-  progresso está em disco e nada é retraduzido nem cobrado duas vezes.
-- **Não desiste.** Erro de rede, limite de uso ou resposta quebrada entram em nova
-  tentativa com espera crescente, e caem para o próximo modelo da fila se preciso.
-- **Diz na cara se deu certo.** O arquivo final sai com `OK` ou `INCOMPLETO` no nome, e
-  uma legenda incompleta pode ser reenviada para completar só o que faltou.
-- **Confere o resultado.** Um controle de qualidade local checa itálico quebrado, símbolo
-  de música perdido, texto que ficou em inglês, linha longa demais e velocidade de leitura.
-- **Interface web** para escolher a legenda, acompanhar o log ao vivo e retomar trabalhos,
-  com explicação de cada campo na própria tela.
-
-Sem dependências: só a biblioteca padrão do Python e o AWS CLI.
+> **English:** A resumable, quality-checked `.srt` subtitle translator built on Amazon
+> Bedrock, with a local web UI. It survives crashes, network failures and model refusals,
+> and marks the output file `OK` or `INCOMPLETO` so you always know what you got. Swapping
+> Bedrock for an API-key provider means implementing one method. Docs are in Portuguese;
+> the code and CLI are self-explanatory.
 
 ---
 
-## O que você precisa antes
+## Por que não é só um `for` chamando uma LLM
+
+Traduzir legenda parece simples até você tentar num filme inteiro. O que quebra:
+
+| O que acontece na prática | O que esta ferramenta faz |
+|---|---|
+| Traduzir linha a linha perde o contexto e o personagem muda de tratamento no meio | Traduz em blocos, cada um enxergando o bloco anterior já traduzido e o seguinte |
+| Nomes e apelidos mudam de tradução ao longo do filme | Gera um guia do filme no início e envia junto em todos os blocos |
+| O modelo se recusa a traduzir letra de música achando que é pedido de letra | Contrato de resposta obrigatório e detecção de recusa, com nova tentativa e troca de modelo |
+| A resposta vem cortada ou fora do formato | Validação antes de aceitar, com o motivo da recusa realimentado na tentativa seguinte |
+| Cai a internet no bloco 60 de 87 | O progresso está em disco; retomar continua do 61 sem retraduzir nem cobrar de novo |
+| Sobra um trecho sem traduzir e você só descobre assistindo | Controle de qualidade local e o resultado estampado no nome do arquivo |
+| Refrão de música devia ficar igual, mas a validação acha que é erro | Dois modelos concordando no mesmo texto derrubam a suspeita, em vez de travar |
+
+Sem dependências: só a biblioteca padrão do Python e o AWS CLI.
+
+## Destaques
+
+- **Retoma de onde parou.** Fechou o notebook, matou o processo, acabou a bateria: nada
+  se perde e nada é pago duas vezes.
+- **Não desiste em silêncio.** Erro de rede, limite de uso ou resposta quebrada viram nova
+  tentativa com espera crescente, e caem para o próximo modelo da fila.
+- **O nome do arquivo é o relatório.** Sai `.pt-BR.OK.srt` ou `.pt-BR.INCOMPLETO.srt`. Uma
+  legenda incompleta pode ser reenviada para completar só o que faltou.
+- **Controle de qualidade local.** Itálico quebrado, símbolo de música perdido, trecho que
+  ficou em inglês, linha longa e velocidade de leitura — medida contra a legenda original,
+  não contra um número fixo.
+- **Interface web** com log ao vivo, e um ícone **ⓘ** ao lado de cada campo explicando o
+  que faz, com exemplo. Nada de adivinhar o que é "CPS máximo".
+
+## Começando
+
+Você precisa de:
 
 | Requisito | Como conferir |
 |---|---|
@@ -35,11 +65,11 @@ O acesso aos modelos **não vem liberado por padrão**. No console da AWS, abra
 **Amazon Bedrock → Model access** e peça acesso aos modelos que quiser usar. A liberação
 costuma ser imediata. Sem isso, toda chamada volta com `AccessDeniedException`.
 
-## Configurar (uma vez)
-
-Copie o exemplo e ajuste com o seu perfil do AWS CLI:
+Configure uma vez:
 
 ```bash
+git clone https://github.com/thiagomes07/srt-bedrock-translator.git
+cd srt-bedrock-translator
 cp srt_translator.local.json.example srt_translator.local.json
 ```
 
@@ -50,16 +80,14 @@ cp srt_translator.local.json.example srt_translator.local.json
 }
 ```
 
-Esse arquivo não vai para o git. Se preferir, use as variáveis `AWS_PROFILE` e
-`AWS_REGION` — elas têm prioridade sobre ele.
+Esse arquivo não vai para o git. Se preferir, use `AWS_PROFILE` e `AWS_REGION` — elas têm
+prioridade sobre ele.
 
 Confirme que está tudo de pé antes de gastar tempo com um filme inteiro:
 
 ```bash
 python3 srt_bedrock_translator.py doctor
 ```
-
-Ele faz uma chamada mínima a cada modelo da lista e diz quais responderam.
 
 ## Como abrir a UI
 
@@ -79,8 +107,8 @@ Se a porta estiver ocupada, use `--port 8766`.
 
 Na tela: escolha a legenda no primeiro campo, clique em **Testar Bedrock** se for a
 primeira vez do dia, e depois em **Iniciar ou retomar**. Todo campo, botão e número tem um
-ícone **ⓘ** ao lado que explica o que faz e mostra um exemplo — inclusive dizendo quais
-você pode ignorar (quase todos).
+ícone **ⓘ** que explica o que faz e mostra um exemplo — inclusive dizendo quais você pode
+ignorar, que são quase todos.
 
 Enquanto roda você acompanha progresso, bloco atual, modelo em uso, log colorido e as
 falas sendo traduzidas em tempo real. Ao terminar, a tela mostra o nome e a pasta do
@@ -140,14 +168,56 @@ Três caminhos, todos equivalentes:
 Se a interface mostrar `stalled`, significa que o progresso está salvo mas o processo
 morreu. Clique em **Retomar selecionado**.
 
-## Comandos auxiliares
+## Usar com outra LLM em vez do Bedrock
 
-```bash
-python3 srt_bedrock_translator.py doctor       # testa credencial, região e acesso aos modelos
-python3 srt_bedrock_translator.py list-models  # lista os modelos visíveis na sua conta
-python3 srt_bedrock_translator.py self-test    # testes internos, sem chamar a AWS
-python3 srt_bedrock_translator.py qc "traduzida.srt" --source "original.srt"
+O Bedrock não é obrigatório. Toda a conversa com o modelo passa por **um único método**,
+`BedrockClient.converse`, que hoje chama o AWS CLI. Para usar uma chave de API, escreva
+uma classe com a mesma assinatura e devolva ela na função `make_llm_client` — é o único
+lugar do código que decide qual provedor usar:
+
+```python
+def make_llm_client(profile, region, timeout, logger):
+    return MinhaLLMClient(profile, region, timeout, logger)
 ```
+
+O contrato que sua classe precisa cumprir:
+
+```python
+class MinhaLLMClient:
+    def __init__(self, profile: str, region: str, timeout: int, logger): ...
+
+    def converse(
+        self,
+        model_id: str,
+        system_text: str,
+        user_text: str,
+        *,
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> tuple[str, dict]:
+        # devolve (texto_da_resposta, meta)
+        # meta = {"usage": {...}, "stopReason": "end_turn" | "max_tokens", ...}
+        # em falha, levante:
+        #   BedrockCallError(msg, retryable=True)          -> tenta de novo
+        #   BedrockCallError(msg, unavailable_model=True)  -> pula esse modelo
+        ...
+```
+
+Três detalhes que valem a atenção, porque o resto do sistema depende deles:
+
+- **`stopReason == "max_tokens"`** precisa ser reportado. É assim que a ferramenta sabe
+  que a resposta veio cortada e aumenta o orçamento na tentativa seguinte.
+- **`retryable`** separa falha temporária (rede, limite de uso) de falha definitiva
+  (parâmetro inválido). A primeira espera e tenta de novo; a segunda troca de modelo.
+- **`usage`** alimenta o contador de tokens da interface. Se seu provedor não devolver,
+  mande `{}` — nada quebra, o contador só fica zerado.
+
+Todo o resto — blocos com contexto, guia do filme, validação, retomada, controle de
+qualidade, consenso entre modelos, interface — é agnóstico de provedor e continua
+funcionando. Os IDs de modelo no campo "Modelos em ordem de fallback" passam a ser os do
+seu provedor.
+
+PRs adicionando provedores prontos são muito bem-vindos.
 
 ## Como a qualidade é garantida
 
@@ -160,7 +230,7 @@ O controle de qualidade separa dois níveis:
 - **Erro grave** — texto vazio, recusa do modelo, tag `<i>` desbalanceada, símbolo `♪`
   perdido, trecho que ficou em inglês. Enquanto existir, o arquivo sai como `INCOMPLETO`.
 - **Aviso** — mais de duas linhas, linha acima de 42 caracteres, leitura rápida demais.
-  Fica registrado no relatório, mas não bloqueia o arquivo.
+  Fica no relatório, mas não bloqueia o arquivo.
 
 A velocidade de leitura é medida **contra a legenda original**, não contra um número fixo.
 Muita legenda comercial já passa do limite confortável na fonte; cobrar o número absoluto
@@ -183,16 +253,50 @@ Para isso não travar o trabalho:
 4. falas aceitas por consenso viram aviso, não erro grave, então não bloqueiam o `OK`.
 
 Quebra estrutural nunca é aceita por consenso: resposta ilegível, fala faltando ou
-sobrando, recusa explícita, tag desbalanceada e símbolo de música perdido continuam
-sendo erro grave.
+sobrando, recusa explícita, tag desbalanceada e símbolo de música perdido continuam sendo
+erro grave.
 
 ## Custo
 
-O custo é o do Bedrock, cobrado por token na sua conta AWS — a ferramenta em si é
-gratuita. Como ordem de grandeza: um filme de cerca de 2.400 legendas consumiu por volta
-de 800 mil tokens no total, entre entrada e saída, usando Claude Sonnet como modelo
-principal. `--polish-pass` praticamente dobra isso. Consulte a tabela de preços da AWS
-para o valor no seu caso.
+O custo é o do provedor, cobrado por token na sua conta — a ferramenta é gratuita. Como
+ordem de grandeza: um filme de cerca de 2.400 legendas consumiu por volta de 800 mil
+tokens no total, entre entrada e saída, usando Claude Sonnet como modelo principal.
+`--polish-pass` praticamente dobra isso.
+
+## Comandos auxiliares
+
+```bash
+python3 srt_bedrock_translator.py doctor       # testa credencial, região e acesso aos modelos
+python3 srt_bedrock_translator.py list-models  # lista os modelos visíveis na sua conta
+python3 srt_bedrock_translator.py self-test    # testes internos, sem chamar a AWS
+python3 srt_bedrock_translator.py qc "traduzida.srt" --source "original.srt"
+```
+
+## Contribuindo
+
+Issues e PRs são bem-vindos. Coisas que ajudariam bastante:
+
+- **Provedores de LLM** além do Bedrock, seguindo o contrato acima.
+- **Outros idiomas de destino** — hoje os prompts e as regras de legendagem assumem
+  português brasileiro.
+- **Outros formatos** de legenda, como `.ass` e `.vtt`.
+- **Heurísticas de qualidade** melhores, principalmente para música e onomatopeia.
+
+Antes de abrir o PR:
+
+```bash
+python3 srt_bedrock_translator.py self-test
+```
+
+O `self-test` roda offline, sem chamar nenhuma API. Se você mexeu em validação ou em
+regra de qualidade, adicione o caso lá — é onde ficam as regressões que já mordeu alguém.
+
+O projeto é um arquivo Python só, de propósito: dá para ler de ponta a ponta e copiar
+pedaços para outro lugar sem herdar um framework.
+
+## Licença
+
+MIT. Use, modifique e redistribua à vontade. Veja [LICENSE](LICENSE).
 
 ## Referências usadas para os critérios
 

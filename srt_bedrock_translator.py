@@ -1226,6 +1226,16 @@ class BedrockClient:
         return text, meta
 
 
+def make_llm_client(profile: str, region: str, timeout: int, logger: JsonLogger) -> Any:
+    """Ponto unico de troca de provedor de LLM.
+
+    Para usar uma chave de API em vez do Bedrock, devolva aqui uma classe com o
+    mesmo `converse(model_id, system_text, user_text, *, max_tokens, temperature)`
+    retornando `(texto, meta)`. Ver a secao "Usar com outra LLM" no README.
+    """
+    return BedrockClient(profile, region, timeout, logger)
+
+
 def is_unavailable_model_error(err: str) -> bool:
     lower = err.lower()
     return any(
@@ -1516,7 +1526,7 @@ class TranslatorJob:
         state["status"] = "running"
         state["last_error"] = None
         self.save_state(state)
-        client = BedrockClient(self.config.profile, self.config.region, self.config.call_timeout, self.logger)
+        client = make_llm_client(self.config.profile, self.config.region, self.config.call_timeout, self.logger)
         try:
             if self.config.context_pass:
                 self.ensure_context_pack(client, state)
@@ -2651,7 +2661,7 @@ class UIHandler(BaseHTTPRequestHandler):
                 profile = data.get("profile") or DEFAULT_PROFILE
                 region = data.get("region") or DEFAULT_REGION
                 models = parse_models(data.get("models") or ",".join(DEFAULT_MODELS))
-                client = BedrockClient(profile, region, int(data.get("call_timeout") or 60), JsonLogger(echo=False))
+                client = make_llm_client(profile, region, int(data.get("call_timeout") or 60), JsonLogger(echo=False))
                 results = []
                 for model in models:
                     try:
@@ -3976,7 +3986,7 @@ def doctor(args: argparse.Namespace) -> int:
         print(ident.stderr or ident.stdout, file=sys.stderr)
         return ident.returncode
     print("Identidade AWS:", ident.stdout.strip())
-    client = BedrockClient(args.profile, args.region, args.call_timeout, logger)
+    client = make_llm_client(args.profile, args.region, args.call_timeout, logger)
     ok_models = []
     bad_models = []
     system = "Responda somente JSON valido."

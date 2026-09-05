@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Local SRT translator to Brazilian Portuguese using Amazon Bedrock through AWS CLI."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+keywords = ["srt", "subtitles", "translation", "bedrock", "llm", "pt-br"]
 dependencies = []
 
 [project.scripts]
