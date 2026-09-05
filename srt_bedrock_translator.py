@@ -413,6 +413,10 @@ class JobConfig:
     polish_pass: bool = False
     retry_qc_issues: bool = True
     qc_repair_rounds: int = 2
+    semantic_review: bool = True
+    semantic_min_signals: int = 1
+    semantic_budget: int = 600
+    semantic_sample_pct: float = 0.10
     max_lines: int = 2
     max_line_length: int = 42
     max_cps: float = 17.0
@@ -921,6 +925,115 @@ def silence_before(cue: SrtCue, anterior: SrtCue | None) -> float:
     except Exception:
         return 0.0
     return max(0.0, (inicio - fim) / 1000.0)
+
+
+SEMANTIC_NEGATION = re.compile(r"\b(not|never|no|nothing|none|neither|nor|cannot)\b|n't", re.IGNORECASE)
+SEMANTIC_CONTRAST = re.compile(r"\b(but|although|though|yet|however|unless|except|instead|rather)\b", re.IGNORECASE)
+SEMANTIC_MODAL = re.compile(r"\b(if|would|could|should|might|must|unless|suppose)\b", re.IGNORECASE)
+SEMANTIC_NUMBER = re.compile(r"\d|\b(one|two|three|four|five|first|second|third|hundred|thousand|million)\b", re.IGNORECASE)
+
+# Frases com que o juiz recua da propria acusacao. Vistas na pratica: ele marcou
+# "errado" e explicou que o sentido estava preservado. Sem isso, retraduziriamos
+# em cima de uma traducao boa.
+JUDGE_HEDGES = (
+    "sentido preservado",
+    "sentido esta preservado",
+    "sentido está preservado",
+    "aceitavel",
+    "aceitável",
+    "funciona",
+    "esta correto",
+    "está correto",
+    "ok —",
+    "ok -",
+    "apos reanalise",
+    "após reanálise",
+    "reanalisando",
+)
+
+
+def semantic_risk_signals(source: str, translation: str) -> list[str]:
+    """Marcas que costumam acompanhar erro de sentido que o QC estrutural nao ve.
+
+    Calibrado contra erros reais achados por um juiz num filme: perda de termo
+    tecnico veio com negacao, distincao colapsada veio com contraste e modal, e
+    termo inflado veio com expansao de tamanho.
+    """
+    limpo_en = visible_text(source)
+    limpo_pt = visible_text(translation)
+    sinais: list[str] = []
+    if SEMANTIC_NEGATION.search(limpo_en):
+        sinais.append("negacao")
+    if SEMANTIC_CONTRAST.search(limpo_en):
+        sinais.append("contraste")
+    if SEMANTIC_MODAL.search(limpo_en):
+        sinais.append("modal")
+    if SEMANTIC_NUMBER.search(limpo_en):
+        sinais.append("numero")
+    if len(limpo_en) > 12 and limpo_pt:
+        razao = len(limpo_pt) / len(limpo_en)
+        if razao > 1.4:
+            sinais.append("expandiu")
+        elif razao < 0.65:
+            sinais.append("encurtou")
+    return sinais
+
+
+def select_for_semantic_review(
+    cues: list[SrtCue],
+    translations: dict[str, dict[str, Any]],
+    *,
+    min_signals: int = 1,
+    budget: int = 600,
+    always: set[int] | None = None,
+    sample_pct: float = 0.10,
+    seed: str = "",
+) -> tuple[list[int], int]:
+    """Escolhe quais falas mandar ao juiz: as de risco mais uma amostra aleatória.
+
+    Só os sinais de risco deixam um buraco de cobertura: uma inversão total de
+    sentido que mantenha o tamanho e não use negação passa despercebida. A amostra
+    aleatória dá um piso de cobertura e, de quebra, uma taxa de erro não enviesada.
+    Devolve (ids, quantos vieram por risco).
+    """
+    always = always or set()
+    elegiveis: list[tuple[int, int]] = []
+    for cue in cues:
+        rec = translations.get(str(cue.id))
+        if not isinstance(rec, dict) or rec.get("status") != "ok":
+            continue
+        if not str(rec.get("text", "")).strip():
+            continue
+        n = len(semantic_risk_signals(cue.text, str(rec["text"])))
+        if cue.id in always:
+            n += 10
+        elegiveis.append((n, cue.id))
+
+    por_risco = sorted((par for par in elegiveis if par[0] >= min_signals), key=lambda i: (-i[0], i[1]))
+    escolhidos = [cue_id for _, cue_id in por_risco[:budget]]
+    quantos_risco = len(escolhidos)
+
+    sobra = budget - len(escolhidos)
+    if sample_pct > 0 and sobra > 0:
+        restantes = [cue_id for _, cue_id in elegiveis if cue_id not in set(escolhidos)]
+        alvo = min(sobra, int(len(elegiveis) * sample_pct))
+        if alvo > 0 and restantes:
+            sorteio = random.Random(f"{seed}:{len(elegiveis)}")
+            escolhidos += sorteio.sample(restantes, min(alvo, len(restantes)))
+    return sorted(set(escolhidos)), quantos_risco
+
+
+def judge_verdict_is_actionable(item: dict[str, Any], texto_atual: str) -> bool:
+    """So aceita acusacao decidida, com alternativa concreta e sem recuo no texto."""
+    if str(item.get("veredito", "")).lower() != "errado":
+        return False
+    sugestao = str(item.get("sugestao", "")).strip()
+    if not sugestao or normalize_subtitle_text(sugestao) == normalize_subtitle_text(texto_atual):
+        return False
+    explicacao = str(item.get("porque", "")).lower()
+    if any(h in explicacao for h in JUDGE_HEDGES):
+        return False
+    return True
 
 
 def make_batches(
@@ -1653,6 +1766,7 @@ class TranslatorJob:
                 "polish_pass": self.config.polish_pass,
                 "retry_qc_issues": self.config.retry_qc_issues,
                 "qc_repair_rounds": self.config.qc_repair_rounds,
+                "semantic_review": self.config.semantic_review,
                 "max_lines": self.config.max_lines,
                 "max_line_length": self.config.max_line_length,
                 "max_cps": self.config.max_cps,
@@ -1840,6 +1954,12 @@ class TranslatorJob:
             self.translate_all(client, state, polish=False)
             if self.config.retry_qc_issues:
                 self.repair_quality_issues(client, state)
+            if self.config.semantic_review:
+                confirmados = self.semantic_review(client, state)
+                if confirmados:
+                    # Refaz os lotes das falas confirmadas, levando a crítica do juiz.
+                    self.translate_all(client, state, polish=False)
+                    self.registrar_mudancas_da_revisao(confirmados)
             if self.config.polish_pass and not self.missing_ids():
                 self.translate_all(client, state, polish=True)
                 if self.config.retry_qc_issues:
@@ -2054,6 +2174,163 @@ class TranslatorJob:
                 self.logger.event("ERROR", f"Lote {batch.number} ficou com erro e o trabalho continuou.", batch=batch.number, error=str(exc)[:600])
         state["current"] = None
         self.save_state(state)
+
+    def judge_pairs(
+        self,
+        client: BedrockClient,
+        state: dict[str, Any],
+        pares: list[dict[str, Any]],
+        *,
+        modelos: list[str] | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        """Manda pares ao juiz e devolve o veredito por id."""
+        if not pares:
+            return {}
+        system, prompt = build_judge_prompt(self, pares)
+        modelos_originais = self.config.models
+        if modelos:
+            self.config.models = modelos
+        try:
+            texto, meta, _modelo, _out = self.call_with_fallback(
+                client,
+                state,
+                system,
+                prompt,
+                max_tokens=min(12000, 220 * len(pares) + 800),
+                temperature=0.1,
+                stage="review",
+                max_cycles=2,
+                tool_config=judge_tool_config(),
+            )
+        finally:
+            self.config.models = modelos_originais
+        self.add_usage(state, meta)
+        payload = extract_json_object(texto)
+        itens = payload.get("itens") if isinstance(payload, dict) else None
+        if not isinstance(itens, list):
+            raise ContractError("Resposta do juiz sem lista itens.")
+        saida: dict[int, dict[str, Any]] = {}
+        for item in itens:
+            if isinstance(item, dict) and "id" in item:
+                try:
+                    saida[int(item["id"])] = item
+                except Exception:
+                    continue
+        return saida
+
+    def semantic_review(self, client: BedrockClient, state: dict[str, Any]) -> list[int]:
+        """Julga o sentido das falas de risco e confirma as acusacoes antes de agir.
+
+        Um unico juiz erra muito: medindo numa amostra real, metade dos apontamentos
+        era ruido, e ele chegou a marcar errado e explicar que o sentido estava certo.
+        Por isso a acusacao so vale se sobreviver ao filtro de recuo e for confirmada
+        por um segundo modelo, no mesmo espirito do consenso ja usado na traducao.
+        """
+        assert self.doc is not None
+        report = load_json(self.job_dir / "quality_report.json", {})
+        marcados = {
+            int(cue_id)
+            for cue_id, rec in self.translations.items()
+            if isinstance(rec, dict) and rec.get("review_flag")
+        } | set(report.get("warning_cue_ids", []) or [])
+        alvos, por_risco = select_for_semantic_review(
+            self.doc.cues,
+            self.translations,
+            min_signals=self.config.semantic_min_signals,
+            budget=self.config.semantic_budget,
+            always=marcados,
+            sample_pct=self.config.semantic_sample_pct,
+            seed=self.job_id,
+        )
+        if not alvos:
+            return []
+        por_id = {cue.id: cue for cue in self.doc.cues}
+        self.logger.event(
+            "INFO",
+            f"Revisão de sentido: {len(alvos)} de {len(self.doc.cues)} falas "
+            f"({por_risco} por sinal de risco, {len(alvos) - por_risco} por amostragem).",
+            total=len(self.doc.cues),
+        )
+        acusados: list[tuple[int, dict[str, Any]]] = []
+        lote = 40
+        for inicio in range(0, len(alvos), lote):
+            if self.stopped():
+                raise JobStopped()
+            fatia = alvos[inicio : inicio + lote]
+            pares = [
+                {
+                    "id": cue_id,
+                    "en": por_id[cue_id].text,
+                    "pt": str(self.translations[str(cue_id)].get("text", "")),
+                }
+                for cue_id in fatia
+                if str(cue_id) in self.translations
+            ]
+            try:
+                vereditos = self.judge_pairs(client, state, pares)
+            except Exception as exc:
+                # Revisão é um extra: falhar aqui não pode derrubar uma tradução pronta.
+                self.logger.event("WARN", "Não consegui avaliar este bloco de sentido; sigo sem ele.", error=str(exc)[:400])
+                continue
+            for cue_id, item in vereditos.items():
+                atual = str(self.translations.get(str(cue_id), {}).get("text", ""))
+                if judge_verdict_is_actionable(item, atual):
+                    acusados.append((cue_id, item))
+        if not acusados:
+            self.logger.event("INFO", "Revisão de sentido não encontrou erro que justifique refazer.")
+            return []
+
+        # Segunda opinião, de preferência com outro provedor.
+        outros = [mo for mo in self.config.models if mo.split(".")[0:2] != self.config.models[0].split(".")[0:2]]
+        segunda = self.judge_pairs(
+            client,
+            state,
+            [
+                {"id": cue_id, "en": por_id[cue_id].text, "pt": str(self.translations[str(cue_id)].get("text", ""))}
+                for cue_id, _ in acusados
+            ],
+            modelos=outros or self.config.models,
+        )
+        confirmados: list[int] = []
+        for cue_id, item in acusados:
+            atual = str(self.translations.get(str(cue_id), {}).get("text", ""))
+            outro = segunda.get(cue_id)
+            if outro and judge_verdict_is_actionable(outro, atual):
+                rec = self.translations[str(cue_id)]
+                rec["semantic_note"] = str(item.get("porque", ""))[:400]
+                rec["semantic_category"] = str(item.get("categoria", ""))[:60]
+                rec["text_before_review"] = atual
+                rec["status"] = "needs_review"
+                confirmados.append(cue_id)
+        self.save_translations()
+        self.logger.event(
+            "WARN" if confirmados else "INFO",
+            f"Revisão de sentido: {len(acusados)} acusações, {len(confirmados)} confirmadas por um segundo modelo.",
+            cue_ids=confirmados[:30],
+        )
+        state["semantic_review_cue_ids"] = confirmados
+        self.save_state(state)
+        return confirmados
+
+    def registrar_mudancas_da_revisao(self, cue_ids: list[int]) -> None:
+        """Guarda o antes e o depois para a revisão poder ser conferida e desfeita."""
+        mudou = 0
+        for cue_id in cue_ids:
+            rec = self.translations.get(str(cue_id))
+            if not isinstance(rec, dict):
+                continue
+            antes = rec.get("text_before_review")
+            if antes and normalize_subtitle_text(antes) != normalize_subtitle_text(str(rec.get("text", ""))):
+                rec["review_flag"] = "sentido_refeito"
+                mudou += 1
+            else:
+                rec.pop("text_before_review", None)
+        self.save_translations()
+        self.logger.event(
+            "INFO",
+            f"Revisão de sentido concluída: {mudou} de {len(cue_ids)} falas mudaram de fato.",
+            cue_ids=cue_ids[:30],
+        )
 
     def repair_quality_issues(self, client: BedrockClient, state: dict[str, Any]) -> None:
         assert self.doc is not None
@@ -2524,6 +2801,13 @@ def build_translation_prompt(job: TranslatorJob, batch: Batch, *, feedback: str 
         "current_batch_translate_this": [cue.as_prompt_item(include_time=True) for cue in batch.cues],
         "next_context_source_only": next_items,
     }
+    notas = {
+        cue.id: job.translations[str(cue.id)]["semantic_note"]
+        for cue in batch.cues
+        if str(cue.id) in job.translations and job.translations[str(cue.id)].get("semantic_note")
+    }
+    if notas:
+        volatil["revisao_de_sentido_corrija_estes"] = notas
     if feedback:
         volatil["retry_feedback_fix_this_first"] = feedback
     # A parte estavel e identica em todos os lotes do filme, entao vira prefixo de cache.
@@ -2573,6 +2857,75 @@ def build_polish_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "")
     return system, prompt_json(payload), None
 
 
+JUDGE_TOOL_NAME = "avaliar_traducoes"
+
+
+def judge_tool_config() -> dict[str, Any]:
+    return {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": JUDGE_TOOL_NAME,
+                    "description": "Devolve a avaliacao de sentido de cada par original/traducao.",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "itens": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "integer"},
+                                            "veredito": {"type": "string", "enum": ["ok", "suspeito", "errado"]},
+                                            "categoria": {"type": "string"},
+                                            "porque": {"type": "string"},
+                                            "sugestao": {
+                                                "type": "string",
+                                                "description": "So quando veredito for errado: a legenda corrigida em pt-BR.",
+                                            },
+                                        },
+                                        "required": ["id", "veredito"],
+                                    },
+                                }
+                            },
+                            "required": ["itens"],
+                        }
+                    },
+                }
+            }
+        ],
+        "toolChoice": {"tool": {"name": JUDGE_TOOL_NAME}},
+    }
+
+
+def build_judge_prompt(job: "TranslatorJob", pares: list[dict[str, Any]]) -> tuple[str, str]:
+    context = load_json(job.context_path, {})
+    system = (
+        "Voce revisa legendas ja traduzidas para portugues brasileiro. "
+        "Seu trabalho NAO e traduzir nem melhorar estilo: e apontar apenas onde o SENTIDO "
+        "esta errado, perdido ou distorcido em relacao ao original. "
+        "Ignore preferencia estilistica, sinonimo aceitavel e a concisao propria de legenda. "
+        "Se o sentido esta preservado, responda ok e siga; nao invente problema. "
+        "Use errado somente quando tiver certeza e souber escrever a legenda corrigida; "
+        "na duvida use suspeito."
+    )
+    payload = {
+        "movie_context": context,
+        "criterios": [
+            "sentido_invertido: a traducao afirma o contrario do original.",
+            "termo_errado: termo tecnico ou juridico trocado por outro que muda o sentido.",
+            "omissao: parte relevante do sentido sumiu.",
+            "adicao: a traducao afirma algo que o original nao diz.",
+            "registro_errado: formalidade ou tratamento incompativel com a cena.",
+            "Quando marcar errado, sugestao deve conter a legenda inteira corrigida, "
+            "respeitando as quebras de linha e as tags do original.",
+        ],
+        "pares_para_avaliar": pares,
+    }
+    return system, prompt_json(payload)
+
+
 def estimate_max_tokens(batch: Batch, *, polish: bool = False) -> int:
     chars = sum(len(cue.text) for cue in batch.cues)
     return max(1800, min(9000, int(chars * 1.6) + len(batch.cues) * 70 + (1200 if polish else 1800)))
@@ -2608,6 +2961,10 @@ def build_config_from_args(args: argparse.Namespace) -> JobConfig:
         polish_pass=getattr(args, "polish_pass", False),
         retry_qc_issues=not getattr(args, "no_retry_qc_issues", False),
         qc_repair_rounds=getattr(args, "qc_repair_rounds", 2),
+        semantic_review=bool(getattr(args, "semantic_review", True)),
+        semantic_min_signals=int(getattr(args, "semantic_min_signals", 1) or 1),
+        semantic_budget=int(getattr(args, "semantic_budget", 600) or 600),
+        semantic_sample_pct=float(getattr(args, "semantic_sample_pct", 0.10) or 0.0),
         max_lines=getattr(args, "max_lines", 2),
         max_line_length=getattr(args, "max_line_length", 42),
         max_cps=getattr(args, "max_cps", 17.0),
@@ -3040,6 +3397,7 @@ class UIHandler(BaseHTTPRequestHandler):
                     polish_pass=bool(data.get("polish_pass", False)),
                     retry_qc_issues=bool(data.get("retry_qc_issues", True)),
                     qc_repair_rounds=int(data.get("qc_repair_rounds") or 2),
+                    semantic_review=bool(data.get("semantic_review", True)),
                     max_lines=int(data.get("max_lines") or 2),
                     max_line_length=int(data.get("max_line_length") or 42),
                     max_cps=float(data.get("max_cps") or 17.0),
@@ -3074,6 +3432,7 @@ class UIHandler(BaseHTTPRequestHandler):
                     polish_pass=bool(data.get("polish_pass", state.get("polish_pass", False))),
                     retry_qc_issues=bool(data.get("retry_qc_issues", state.get("retry_qc_issues", True))),
                     qc_repair_rounds=int(data.get("qc_repair_rounds") or state.get("qc_repair_rounds") or 2),
+                    semantic_review=bool(data.get("semantic_review", True)),
                     max_lines=int(data.get("max_lines") or state.get("max_lines") or 2),
                     max_line_length=int(data.get("max_line_length") or state.get("max_line_length") or 42),
                     max_cps=float(data.get("max_cps") or state.get("max_cps") or 17.0),
@@ -3706,6 +4065,7 @@ UI_HTML = r"""<!doctype html>
         <label class="toggle-row"><input id="retryForever" type="checkbox" checked> <span>Retentar até concluir ou parar manualmente</span> <button class="info" data-help="retryForever" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="retryQc" type="checkbox" checked> <span>Refazer automaticamente cues com erro duro de QC</span> <button class="info" data-help="retryQc" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="contextPass" type="checkbox" checked> <span>Criar guia de contexto antes de traduzir</span> <button class="info" data-help="contextPass" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="semanticReview" type="checkbox" checked> <span>Revisar o sentido com um segundo modelo</span> <button class="info" data-help="semanticReview" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="polishPass" type="checkbox"> <span>Rodar passe final de revisão</span> <button class="info" data-help="polishPass" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="forceNew" type="checkbox"> <span>Criar trabalho novo mesmo se já existir estado</span> <button class="info" data-help="forceNew" aria-label="Ajuda">i</button></label>
 
@@ -3892,6 +4252,12 @@ UI_HTML = r"""<!doctype html>
         p: "Antes de comecar, ele le amostras do filme inteiro e escreve para si mesmo um resumo: quem são os personagens, que tom o filme tem, como as pessoas se tratam. Esse resumo vai junto em todos os blocos.",
         e: "É o que impede o problema classico de tradução em pedacos: o personagem tratar alguém por você no começo do filme e por tu no fim, ou um apelido virar uma coisa no bloco 3 e outra coisa no bloco 40. Custa uma chamada a mais, no começo, uma vez só.",
         d: "Deixe ligado."
+      },
+      semanticReview: {
+        t: "Revisar o sentido com um segundo modelo",
+        p: "Depois de traduzir, um segundo modelo lê pares de original e tradução e aponta só onde o SENTIDO ficou errado. Não é revisão de estilo: é a única checagem que enxerga um erro escrito em português perfeito.",
+        e: "As checagens normais olham tag, símbolo de música, linha e velocidade. Nenhuma delas percebe que <code>I have no authority to deal</code> virou <i>não tenho autoridade para isso</i>, perdendo o sentido jurídico de negociar acordo. Esta revisão percebe.<br><br>Ela não julga o filme inteiro: escolhe as falas com sinal de risco, como negação, contraste, número e mudança grande de tamanho, que foi onde os erros reais apareceram. E não age sozinha na primeira acusação: um juiz só erra muito, então a acusação precisa ser confirmada por um segundo modelo antes de a fala ser refeita. O texto anterior fica guardado.",
+        d: "Deixe ligado. Custa cerca de 10% a mais e pega o que mais nada pega."
       },
       polishPass: {
         t: "Rodar passe final de revisão",
@@ -4162,6 +4528,7 @@ UI_HTML = r"""<!doctype html>
         retry_forever: document.querySelector("#retryForever").checked,
         retry_qc_issues: document.querySelector("#retryQc").checked,
         context_pass: document.querySelector("#contextPass").checked,
+        semantic_review: document.querySelector("#semanticReview").checked,
         polish_pass: document.querySelector("#polishPass").checked,
         force_new: document.querySelector("#forceNew").checked
       };
@@ -4873,6 +5240,49 @@ Freud.
     sem_pausa = make_batches(cena_cues, batch_size=24, max_chars=99999, scene_gap=10**9)
     assert len(sem_pausa) == 1, [(b.start_id, b.end_id) for b in sem_pausa]
 
+    # Revisão de sentido: sinais de risco calibrados contra erros reais.
+    assert "negacao" in semantic_risk_signals("I have no authority to deal.", "Não tenho autoridade para isso.")
+    assert "contraste" in semantic_risk_signals("I could've been mistaken, but I wasn't wrong.", "x")
+    assert "expandiu" in semantic_risk_signals("first-degree murder", "homicídio doloso em primeiro grau")
+    assert semantic_risk_signals("Hello there my friend.", "Olá, meu amigo.") == []
+
+    risco_cues = [
+        SrtCue(id=1, number="1", timing="00:00:01,000 --> 00:00:03,000", text="I have no authority to deal."),
+        SrtCue(id=2, number="2", timing="00:00:03,000 --> 00:00:05,000", text="Hello there my friend."),
+    ]
+    risco_tr = {"1": {"status": "ok", "text": "Não tenho autoridade para isso."}, "2": {"status": "ok", "text": "Olá, meu amigo."}}
+    assert select_for_semantic_review(risco_cues, risco_tr, sample_pct=0)[0] == [1]
+    assert select_for_semantic_review(risco_cues, risco_tr, always={2}, sample_pct=0)[0] == [1, 2]
+
+    # O juiz recuando da própria acusação não pode disparar retradução.
+    atual = "Não tenho autoridade para isso."
+    assert judge_verdict_is_actionable(
+        {"veredito": "errado", "porque": "perdeu o sentido de negociar", "sugestao": "Não tenho autoridade para negociar."}, atual
+    )
+    assert not judge_verdict_is_actionable(
+        {"veredito": "errado", "porque": "Após reanálise, sentido preservado.", "sugestao": "outra coisa"}, atual
+    ), "recuo do juiz deveria bloquear a ação"
+    assert not judge_verdict_is_actionable({"veredito": "suspeito", "porque": "x", "sugestao": "y"}, atual)
+    assert not judge_verdict_is_actionable({"veredito": "errado", "porque": "x", "sugestao": atual}, atual)
+    assert not judge_verdict_is_actionable({"veredito": "errado", "porque": "x"}, atual)
+
+    # A amostragem cobre o buraco dos sinais: inversão de sentido do mesmo tamanho
+    # e sem negação não gera sinal nenhum.
+    invisivel = semantic_risk_signals("You print any of this, I'll sue your ass.", "Sim, eu fiz isso e tenho orgulho.")
+    assert invisivel == [], invisivel
+    muitos = [
+        SrtCue(id=i, number=str(i), timing="00:00:01,000 --> 00:00:03,000", text="Plain line here.")
+        for i in range(1, 51)
+    ]
+    muitos_tr = {str(i): {"status": "ok", "text": "Linha simples aqui."} for i in range(1, 51)}
+    so_risco, n_risco = select_for_semantic_review(muitos, muitos_tr, sample_pct=0)
+    assert so_risco == [] and n_risco == 0
+    com_amostra, n_risco2 = select_for_semantic_review(muitos, muitos_tr, sample_pct=0.2, seed="job")
+    assert n_risco2 == 0 and len(com_amostra) == 10, (n_risco2, len(com_amostra))
+    # a amostra é estável entre retomadas do mesmo trabalho
+    assert select_for_semantic_review(muitos, muitos_tr, sample_pct=0.2, seed="job")[0] == com_amostra
+    assert select_for_semantic_review(muitos, muitos_tr, sample_pct=0.2, seed="outro")[0] != com_amostra
+
     print("self-test ok")
     return 0
 
@@ -4953,6 +5363,10 @@ def add_common_job_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-context-pass", action="store_true")
     parser.add_argument("--polish-pass", action="store_true", help="roda um segundo passe de revisão")
     parser.add_argument("--no-retry-qc-issues", action="store_true", help="não refaz automaticamente cues que falham no QC duro")
+    parser.add_argument("--no-semantic-review", dest="semantic_review", action="store_false", help="desliga a revisao de sentido por LLM")
+    parser.add_argument("--semantic-min-signals", type=int, default=1, help="sinais de risco para entrar na revisao de sentido")
+    parser.add_argument("--semantic-sample-pct", type=float, default=0.10, help="fracao sorteada alem das falas de risco")
+    parser.add_argument("--semantic-budget", type=int, default=600, help="teto de falas enviadas a revisao de sentido")
     parser.add_argument("--qc-repair-rounds", type=int, default=2)
     parser.add_argument("--max-lines", type=int, default=2)
     parser.add_argument("--max-line-length", type=int, default=42)
