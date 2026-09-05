@@ -3589,7 +3589,7 @@ UI_HTML = r"""<!doctype html>
       maxCps: {
         t: "CPS máximo",
         p: "Velocidade de leitura: quantas letras aparecem na tela por segundo. Acima de mais ou menos 17, a legenda some antes de você terminar de ler. Mas aqui este número não é cobrado no seco: ele é sempre comparado com a legenda original.",
-        e: "Por que comparado? Porque nesta legenda em inglês, 48 por cento das falas JA passavam de 17. Cobrando o número puro, metade do filme viraria aviso e o problema de verdade sumiria no meio do barulho. Então a regra e: original a 25 e tradução a 26 não gera aviso, porque o filme já era corrido ali. Original a 15 e tradução a 30 gera aviso, porque quem deixou pesado foi a tradução.",
+        e: "Por que comparado? Porque nesta legenda em inglês, 48 por cento das falas JÁ passavam de 17. Cobrando o número puro, metade do filme viraria aviso e o problema de verdade sumiria no meio do barulho. Então a regra é: original a 25 e tradução a 26 não gera aviso, porque o filme já era corrido ali. Original a 15 e tradução a 30 gera aviso, porque quem deixou pesado foi a tradução.",
         d: "Deixe 17."
       },
       qcRounds: {
@@ -3631,7 +3631,7 @@ UI_HTML = r"""<!doctype html>
       doctor: {
         t: "Testar Bedrock",
         p: "Um teste rápido de porta, antes de comecar pra valer. Ele manda um pedido mínimo, literalmente pedindo a palavra OK, para cada modelo da lista, usando a conta e a região preenchidas aqui.",
-        e: "Serve para você não descobrir depois de 20 minutos que a credencial estava errada. Ele responde três perguntas: a conta funciona? a região responde? esta conta tem permissão neste modelo? Se algum voltar <code>AccessDeniedException</code>, e questão de permissão: entre no console da AWS, va em Amazon Bedrock, Model access, e libere o modelo. O que ele NAO faz e avaliar qualidade de tradução: ele só testa se a porta abre.",
+        e: "Serve para você não descobrir depois de 20 minutos que a credencial estava errada. Ele responde três perguntas: a conta funciona? a região responde? esta conta tem permissão neste modelo? Se algum voltar <code>AccessDeniedException</code>, e questão de permissão: entre no console da AWS, va em Amazon Bedrock, Model access, e libere o modelo. O que ele NÃO faz e avaliar qualidade de tradução: ele só testa se a porta abre.",
         d: "Vale clicar antes do primeiro filme do dia."
       },
       start: {
@@ -3957,7 +3957,7 @@ UI_HTML = r"""<!doctype html>
         lastStatus[data.job_id] = "running";
         toast("Trabalho iniciado", `${fileName(cfg.path)} — acompanhe pelo log abaixo. Pode fechar esta aba: o servidor continua traduzindo.`, "success");
       } finally { busy("#start", false); }
-      // refresh separado: se ele falhar, o trabalho JA comecou e dizer
+      // refresh separado: se ele falhar, o trabalho JÁ comecou e dizer
       // "não consegui iniciar" seria mentira.
       try { await refreshJobs(); await refreshJob(); }
       catch (e) { toast("Trabalho rodando, mas a tela não atualizou", e.message, "warn"); }
