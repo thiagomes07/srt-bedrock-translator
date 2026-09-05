@@ -19,6 +19,11 @@ para trocar por OpenAI, Anthropic, Gemini ou Ollama com uma chave de API.
 > Bedrock for an API-key provider means implementing one method. Docs are in Portuguese;
 > the code and CLI are self-explanatory.
 
+![A interface do SRT Bedrock Translator, com formulário à esquerda e status, log e comparação à direita](docs/ui-completa.png)
+
+*Tudo numa tela só: à esquerda a legenda e os ajustes, à direita o progresso, o log ao vivo,
+o arquivo gerado e a tradução saindo lado a lado com o original.*
+
 ---
 
 ## Por que não é só um `for` chamando uma LLM
@@ -106,13 +111,22 @@ python3 srt_bedrock_translator.py ui --base "/caminho/da/pasta/do/filme"
 Se a porta estiver ocupada, use `--port 8766`.
 
 Na tela: escolha a legenda no primeiro campo, clique em **Testar Bedrock** se for a
-primeira vez do dia, e depois em **Iniciar ou retomar**. Todo campo, botão e número tem um
-ícone **ⓘ** que explica o que faz e mostra um exemplo — inclusive dizendo quais você pode
-ignorar, que são quase todos.
+primeira vez do dia, e depois em **Iniciar ou retomar**.
 
-Enquanto roda você acompanha progresso, bloco atual, modelo em uso, log colorido e as
-falas sendo traduzidas em tempo real. Ao terminar, a tela mostra o nome e a pasta do
-arquivo final, com botão de copiar o caminho.
+Nenhum campo exige que você saiba o que ele significa. Todo campo, botão, número e métrica
+tem um ícone **ⓘ** que abre uma explicação com exemplo concreto — e diz se você precisa
+mexer, o que quase nunca é o caso:
+
+![Explicação do campo CPS máximo, com o que ele faz, um exemplo prático e a orientação de deixar como está](docs/ajuda-contextual.png)
+
+Enquanto roda você acompanha progresso, bloco atual, modelo em uso e o log colorido. E vê
+a tradução saindo, original de um lado e português do outro, sem precisar abrir o arquivo:
+
+![Painel comparando o original em inglês e a tradução em português, fala por fala](docs/comparar-traducao.png)
+
+Terminado, dá para trocar a lista para o filme inteiro e usar a busca para conferir como um
+nome ou uma expressão foi resolvida em todas as vezes que aparece. Ao final, a tela mostra o
+nome e a pasta do arquivo gerado, com botão de copiar o caminho.
 
 ## Como traduzir pelo terminal
 
