@@ -1,0 +1,13 @@
+[project]
+name = "srt-bedrock-translator"
+version = "0.1.0"
+description = "Local SRT translator to Brazilian Portuguese using Amazon Bedrock through AWS CLI."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+srt-bedrock-translator = "srt_bedrock_translator:main"
+
+[tool.ruff]
+line-length = 120
