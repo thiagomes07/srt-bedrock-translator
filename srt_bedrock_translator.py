@@ -2257,9 +2257,59 @@ def list_srt_files(base: Path) -> list[dict[str, Any]]:
     return out[:500]
 
 
+def job_index_path(base: Path) -> Path:
+    return base / ".srt_translator_jobs" / "known_jobs.json"
+
+
+def register_job_dir(base: Path, job_dir: Path) -> None:
+    """Anota o job para a UI achar mesmo quando a legenda esta fora da pasta base.
+
+    O diretorio de estado nasce ao lado do .srt de origem. Sem este indice, uma
+    legenda escolhida pelo campo de caminho absoluto virava um trabalho que roda
+    mas nao aparece na tela: sem status, sem log e sem botao de parar.
+    """
+    try:
+        path = job_index_path(base)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        known = [str(item) for item in load_json(path, []) if isinstance(item, str)]
+        entry = str(job_dir.resolve())
+        if entry in known:
+            return
+        known.append(entry)
+        atomic_write_json(path, known[-200:])
+    except Exception:
+        pass
+
+
+def known_job_dirs(base: Path) -> list[Path]:
+    dirs: list[Path] = []
+    for item in load_json(job_index_path(base), []):
+        if not isinstance(item, str):
+            continue
+        path = Path(item)
+        if (path / "state.json").exists():
+            dirs.append(path)
+    with RUNNERS_LOCK:
+        for runner in RUNNERS.values():
+            job_dir = getattr(runner, "job_dir", None)
+            if job_dir and (Path(job_dir) / "state.json").exists():
+                dirs.append(Path(job_dir))
+    return dirs
+
+
 def load_jobs(base: Path) -> list[dict[str, Any]]:
+    state_paths: dict[str, Path] = {}
+    for state_path in base.rglob(".srt_translator_jobs/*/state.json"):
+        state_paths[str(state_path.parent.resolve())] = state_path
+    for job_dir in known_job_dirs(base):
+        state_paths.setdefault(str(job_dir.resolve()), job_dir / "state.json")
+    ordered = sorted(
+        state_paths.values(),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
     jobs = []
-    for state_path in sorted(base.rglob(".srt_translator_jobs/*/state.json"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
+    for state_path in ordered:
         state = load_json(state_path, {})
         if not state:
             continue
@@ -2347,6 +2397,9 @@ def find_job_dir(base: Path, job_id: str) -> Path | None:
     for state_path in base.rglob(".srt_translator_jobs/*/state.json"):
         if state_path.parent.name == job_id:
             return state_path.parent
+    for job_dir in known_job_dirs(base):
+        if job_dir.name == job_id:
+            return job_dir
     direct = base / ".srt_translator_jobs" / job_id
     return direct if direct.exists() else None
 
@@ -2511,6 +2564,7 @@ class UIHandler(BaseHTTPRequestHandler):
                     force_new=bool(data.get("force_new", False)),
                 )
                 job = TranslatorJob(cfg)
+                register_job_dir(self.base, job.job_dir)
                 start_job_thread(job)
                 self.send_json({"job_id": job.job_id})
                 return
@@ -2544,6 +2598,7 @@ class UIHandler(BaseHTTPRequestHandler):
                     job_root=job_dir.parent,
                 )
                 job = TranslatorJob(cfg)
+                register_job_dir(self.base, job.job_dir)
                 start_job_thread(job)
                 self.send_json({"job_id": job.job_id})
                 return
@@ -2646,27 +2701,27 @@ UI_HTML = r"""<!doctype html>
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
-      letter-spacing: 0;
     }
     header {
-      padding: 18px 24px 12px;
+      padding: 14px 24px;
       border-bottom: 1px solid var(--line);
       background: #fff;
       position: sticky;
       top: 0;
       z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
     }
-    h1 {
-      margin: 0;
-      font-size: 20px;
-      font-weight: 750;
-    }
+    h1 { margin: 0; font-size: 19px; font-weight: 750; }
+    .header-hint { font-size: 12px; color: var(--muted); }
     main {
       display: grid;
-      grid-template-columns: minmax(300px, 420px) 1fr;
+      grid-template-columns: minmax(320px, 440px) 1fr;
       gap: 16px;
       padding: 16px;
-      max-width: 1500px;
+      max-width: 1560px;
       margin: 0 auto;
     }
     section {
@@ -2677,27 +2732,17 @@ UI_HTML = r"""<!doctype html>
       min-width: 0;
     }
     .panel-head {
-      padding: 14px 16px;
+      padding: 13px 16px;
       border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
     }
-    .panel-head h2 {
-      margin: 0;
-      font-size: 15px;
-    }
-    .panel-body {
-      padding: 16px;
-    }
-    label {
-      display: block;
-      font-size: 12px;
-      font-weight: 650;
-      color: var(--muted);
-      margin: 12px 0 6px;
-    }
+    .panel-head h2 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+    .panel-body { padding: 16px; }
+    label { display: block; font-size: 12px; font-weight: 650; color: var(--muted); margin: 12px 0 6px; }
+    .field-label { display: flex; align-items: center; gap: 5px; }
     select, input, textarea {
       width: 100%;
       border: 1px solid var(--line);
@@ -2707,6 +2752,11 @@ UI_HTML = r"""<!doctype html>
       color: var(--ink);
       background: #fff;
     }
+    select:focus, input:focus, textarea:focus {
+      outline: 2px solid rgba(31,111,235,.35);
+      outline-offset: 1px;
+      border-color: var(--blue);
+    }
     textarea {
       min-height: 92px;
       resize: vertical;
@@ -2714,17 +2764,9 @@ UI_HTML = r"""<!doctype html>
       font-size: 12px;
       line-height: 1.45;
     }
-    .row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-    .actions {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-top: 14px;
-    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+    .action-wrap { display: flex; align-items: center; gap: 4px; }
     button {
       border: 1px solid transparent;
       border-radius: 6px;
@@ -2735,9 +2777,24 @@ UI_HTML = r"""<!doctype html>
       background: #eef2f7;
       color: var(--ink);
     }
+    button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     button.primary { background: var(--blue); color: white; }
     button.danger { background: #fff1f1; color: var(--red); border-color: #efc5c5; }
-    button:disabled { opacity: .55; cursor: not-allowed; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.busy { position: relative; color: transparent !important; }
+    button.busy::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.45);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    button.busy:not(.primary)::after { border-color: rgba(32,36,43,.25); border-top-color: var(--ink); }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .toggle-row {
       display: flex;
       align-items: center;
@@ -2746,88 +2803,235 @@ UI_HTML = r"""<!doctype html>
       color: var(--muted);
       font-size: 13px;
     }
-    .toggle-row input { width: auto; }
+    .toggle-row input { width: auto; flex: none; }
+    .toggle-row span { flex: 1; }
+
+    /* ---- botao de ajuda e popover ---- */
+    .info {
+      width: 16px; height: 16px;
+      min-width: 16px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+      background: #f2f5f9;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      font-style: italic;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: help;
+    }
+    .info:hover, .info.open {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+    #help {
+      position: fixed;
+      z-index: 60;
+      width: 330px;
+      max-width: calc(100vw - 24px);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 16px 44px rgba(20,26,34,.22);
+      padding: 13px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      display: none;
+    }
+    #help.show { display: block; }
+    #help h4 { margin: 0 0 6px; font-size: 13px; font-weight: 800; }
+    #help p { margin: 0 0 8px; color: #3c434e; }
+    #help .ex {
+      background: #f5f8fc;
+      border-left: 3px solid var(--blue);
+      border-radius: 0 6px 6px 0;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #2c333d;
+    }
+    #help .ex b { color: var(--blue); display: block; margin-bottom: 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    #help code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+      background: #eaeff6;
+      padding: 1px 4px;
+      border-radius: 3px;
+      overflow-wrap: anywhere;
+    }
+    #help .pin-hint { margin: 8px 0 0; font-size: 11px; color: var(--muted); }
+
+    /* ---- toasts ---- */
+    #toasts {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 80;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      width: 380px;
+      max-width: calc(100vw - 28px);
+    }
+    .toast {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--muted);
+      border-radius: 8px;
+      box-shadow: 0 12px 32px rgba(20,26,34,.18);
+      padding: 11px 13px;
+      animation: slidein .18s ease;
+    }
+    @keyframes slidein { from { transform: translateX(14px); opacity: 0; } }
+    .toast.success { border-left-color: var(--green); }
+    .toast.error { border-left-color: var(--red); }
+    .toast.warn { border-left-color: var(--amber); }
+    .toast.info { border-left-color: var(--blue); }
+    .toast .t-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .toast strong { font-size: 13px; }
+    .toast .t-body { font-size: 12.5px; color: #464d58; margin-top: 3px; line-height: 1.45; overflow-wrap: anywhere; }
+    .toast .t-close {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+      padding: 0 2px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .toast .t-actions { margin-top: 8px; display: flex; gap: 6px; }
+    .toast .t-actions button { padding: 5px 9px; font-size: 12px; }
+
+    /* ---- status ---- */
     .status-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      grid-template-columns: repeat(5, minmax(104px, 1fr));
       gap: 10px;
       padding: 16px;
     }
     .metric {
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 12px;
+      padding: 11px;
       background: #fbfcfe;
     }
-    .metric .value {
-      font-size: 19px;
-      font-weight: 800;
-      margin-bottom: 2px;
+    .metric .value { font-size: 19px; font-weight: 800; margin-bottom: 2px; }
+    .metric .label { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+    .bar { height: 10px; background: #e7ebf1; border-radius: 99px; overflow: hidden; margin: 0 16px 8px; }
+    .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--blue), var(--green)); transition: width .25s ease; }
+    .eta { margin: 0 16px 14px; font-size: 12px; color: var(--muted); }
+
+    /* ---- cartao de resultado ---- */
+    .result {
+      margin: 0 16px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+      display: none;
     }
-    .metric .label {
-      font-size: 12px;
-      color: var(--muted);
+    .result.show { display: block; }
+    .result.ok { border-color: #b9dfc6; background: #f2fdf6; }
+    .result.warn { border-color: #f0d99f; background: #fffaf0; }
+    .result.bad { border-color: #efc5c5; background: #fff5f5; }
+    .result h3 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 7px; }
+    .result .sub { font-size: 12.5px; color: #4a515c; margin-bottom: 10px; }
+    .filebox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
     }
-    .bar {
-      height: 10px;
-      background: #e7ebf1;
-      border-radius: 99px;
-      overflow: hidden;
-      margin: 0 16px 16px;
+    .filebox .fb-main { min-width: 0; flex: 1; }
+    .filebox .fb-name {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12.5px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
     }
-    .bar > div {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--blue), var(--green));
-      transition: width .25s ease;
+    .filebox .fb-dir { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+    .filebox button { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+    .result ul { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: #444b56; line-height: 1.6; }
+
+    /* ---- caminhos ---- */
+    .paths { display: grid; gap: 7px; }
+    .pathline { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+    .pathline .pk { color: var(--muted); font-weight: 700; min-width: 74px; flex: none; }
+    .pathline .pv {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+      overflow-wrap: anywhere;
+      flex: 1;
     }
-    .split {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-      padding: 0 16px 16px;
+    .pathline .copy {
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #eef2f7;
+      border-radius: 4px;
+      flex: none;
     }
+    .alert-line {
+      margin-top: 10px;
+      font-size: 12.5px;
+      color: var(--red);
+      background: #fff4f4;
+      border: 1px solid #f2d2d2;
+      border-radius: 6px;
+      padding: 8px 10px;
+      overflow-wrap: anywhere;
+      display: none;
+    }
+    .alert-line.show { display: block; }
+
+    /* ---- log e preview ---- */
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 16px 16px; }
+    .sub-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
     .log {
-      height: 420px;
+      height: 400px;
       overflow: auto;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #101418;
-      color: #e8edf2;
-      padding: 12px;
+      padding: 10px 12px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
-      line-height: 1.45;
-      white-space: pre-wrap;
+      line-height: 1.5;
     }
+    .log .ln { color: #cfd8e3; white-space: pre-wrap; overflow-wrap: anywhere; padding: 1px 0; }
+    .log .ln .ts { color: #6d7a89; }
+    .log .ln.WARN { color: #ffcf70; }
+    .log .ln.ERROR { color: #ff9a9a; }
+    .log .ln.good { color: #8ee0a8; }
     .preview {
-      height: 420px;
+      height: 400px;
       overflow: auto;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fbfcfe;
       padding: 12px;
     }
-    .cue {
-      border-bottom: 1px solid var(--line);
-      padding: 10px 0;
-    }
+    .cue { border-bottom: 1px solid var(--line); padding: 9px 0; }
     .cue:last-child { border-bottom: 0; }
-    .cue .meta {
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 6px;
-    }
-    .cue pre {
-      margin: 5px 0 0;
-      white-space: pre-wrap;
-      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    }
+    .cue .meta { color: var(--muted); font-size: 11.5px; margin-bottom: 5px; }
+    .cue .tag { font-weight: 700; }
+    .cue .tag.ok { color: var(--green); }
+    .cue .tag.pending { color: var(--amber); }
+    .cue pre { margin: 4px 0 0; white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+    .cue pre.src { color: var(--muted); }
     .pill {
       display: inline-flex;
       align-items: center;
       min-height: 24px;
-      padding: 2px 8px;
+      padding: 2px 9px;
       border-radius: 99px;
       font-size: 12px;
       font-weight: 700;
@@ -2837,35 +3041,17 @@ UI_HTML = r"""<!doctype html>
     .pill.complete { color: var(--green); border-color: #b9dfc6; background: #f0fff5; }
     .pill.running { color: var(--blue); border-color: #bfd3ff; background: #f2f6ff; }
     .pill.failed, .pill.incomplete { color: var(--red); border-color: #efc5c5; background: #fff1f1; }
-    .pill.stopped { color: var(--amber); border-color: #f0d99f; background: #fff8e6; }
-    .jobs {
-      display: grid;
-      gap: 8px;
-      max-height: 240px;
-      overflow: auto;
-    }
-    .job {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
-      cursor: pointer;
-      background: #fff;
-    }
+    .pill.stopped, .pill.stalled { color: var(--amber); border-color: #f0d99f; background: #fff8e6; }
+    .jobs { display: grid; gap: 8px; max-height: 250px; overflow: auto; }
+    .job { border: 1px solid var(--line); border-radius: 8px; padding: 10px; cursor: pointer; background: #fff; }
+    .job:hover { border-color: #b9c6d8; }
     .job.active { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(31, 111, 235, .12); }
-    .job strong {
-      display: block;
-      font-size: 13px;
-      overflow-wrap: anywhere;
-      margin-bottom: 6px;
-    }
-    .small {
-      font-size: 12px;
-      color: var(--muted);
-      overflow-wrap: anywhere;
-    }
-    @media (max-width: 900px) {
+    .job strong { display: block; font-size: 12.5px; overflow-wrap: anywhere; margin-bottom: 6px; }
+    .small { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+    .empty { font-size: 12.5px; color: var(--muted); padding: 6px 0; }
+    @media (max-width: 980px) {
       main { grid-template-columns: 1fr; }
-      .status-grid { grid-template-columns: 1fr 1fr; }
+      .status-grid { grid-template-columns: repeat(2, 1fr); }
       .split { grid-template-columns: 1fr; }
     }
   </style>
@@ -2873,119 +3059,323 @@ UI_HTML = r"""<!doctype html>
 <body>
   <header>
     <h1>SRT Bedrock Translator</h1>
+    <span class="header-hint">Passe o mouse no <span class="info" style="cursor:default">i</span> de cada item para entender o que ele faz.</span>
   </header>
+  <div id="toasts" aria-live="polite"></div>
+  <div id="help" role="tooltip"></div>
   <main>
     <section>
       <div class="panel-head">
-        <h2>Entrada</h2>
-        <button id="refresh">Atualizar</button>
+        <h2>Entrada <button class="info" data-help="painelEntrada" aria-label="Ajuda">i</button></h2>
+        <div class="action-wrap">
+          <button id="refresh">Atualizar</button>
+          <button class="info" data-help="refresh" aria-label="Ajuda sobre Atualizar">i</button>
+        </div>
       </div>
       <div class="panel-body">
-        <label for="file">Legenda encontrada</label>
+        <label class="field-label" for="file">Legenda encontrada <button class="info" data-help="file" aria-label="Ajuda">i</button></label>
         <select id="file"></select>
-        <label for="path">Ou caminho absoluto</label>
+
+        <label class="field-label" for="path">Ou caminho absoluto <button class="info" data-help="path" aria-label="Ajuda">i</button></label>
         <input id="path" placeholder="/caminho/arquivo.srt">
+
         <div class="row">
           <div>
-            <label for="profile">AWS profile</label>
+            <label class="field-label" for="profile">AWS profile <button class="info" data-help="profile" aria-label="Ajuda">i</button></label>
             <input id="profile" value="default">
           </div>
           <div>
-            <label for="region">Regiao</label>
+            <label class="field-label" for="region">Regiao <button class="info" data-help="region" aria-label="Ajuda">i</button></label>
             <input id="region" value="us-east-1">
           </div>
         </div>
-        <label for="models">Modelos em ordem de fallback</label>
+
+        <label class="field-label" for="models">Modelos em ordem de fallback <button class="info" data-help="models" aria-label="Ajuda">i</button></label>
         <textarea id="models"></textarea>
+
         <div class="row">
           <div>
-            <label for="batchSize">Legendas por lote</label>
+            <label class="field-label" for="batchSize">Legendas por lote <button class="info" data-help="batchSize" aria-label="Ajuda">i</button></label>
             <input id="batchSize" type="number" min="8" max="120" value="28">
           </div>
           <div>
-            <label for="batchChars">Caracteres por lote</label>
+            <label class="field-label" for="batchChars">Caracteres por lote <button class="info" data-help="batchChars" aria-label="Ajuda">i</button></label>
             <input id="batchChars" type="number" min="1500" max="16000" value="4300">
           </div>
         </div>
         <div class="row">
           <div>
-            <label for="attempts">Tentativas por modelo</label>
+            <label class="field-label" for="attempts">Tentativas por modelo <button class="info" data-help="attempts" aria-label="Ajuda">i</button></label>
             <input id="attempts" type="number" min="1" max="12" value="3">
           </div>
           <div>
-            <label for="timeout">Timeout por chamada</label>
+            <label class="field-label" for="timeout">Timeout por chamada <button class="info" data-help="timeout" aria-label="Ajuda">i</button></label>
             <input id="timeout" type="number" min="60" max="900" value="240">
           </div>
         </div>
         <div class="row">
           <div>
-            <label for="maxLines">Maximo de linhas</label>
+            <label class="field-label" for="maxLines">Maximo de linhas <button class="info" data-help="maxLines" aria-label="Ajuda">i</button></label>
             <input id="maxLines" type="number" min="1" max="4" value="2">
           </div>
           <div>
-            <label for="lineLength">Caracteres por linha</label>
+            <label class="field-label" for="lineLength">Caracteres por linha <button class="info" data-help="lineLength" aria-label="Ajuda">i</button></label>
             <input id="lineLength" type="number" min="24" max="60" value="42">
           </div>
         </div>
         <div class="row">
           <div>
-            <label for="maxCps">CPS maximo</label>
+            <label class="field-label" for="maxCps">CPS maximo <button class="info" data-help="maxCps" aria-label="Ajuda">i</button></label>
             <input id="maxCps" type="number" min="8" max="30" step="0.5" value="17">
           </div>
           <div>
-            <label for="qcRounds">Rodadas de reparo QC</label>
+            <label class="field-label" for="qcRounds">Rodadas de reparo QC <button class="info" data-help="qcRounds" aria-label="Ajuda">i</button></label>
             <input id="qcRounds" type="number" min="0" max="6" value="2">
           </div>
         </div>
-        <label class="toggle-row"><input id="retryForever" type="checkbox" checked> Retentar ate concluir ou parar manualmente</label>
-        <label class="toggle-row"><input id="retryQc" type="checkbox" checked> Refazer automaticamente cues com erro duro de QC</label>
-        <label class="toggle-row"><input id="contextPass" type="checkbox" checked> Criar guia de contexto antes de traduzir</label>
-        <label class="toggle-row"><input id="polishPass" type="checkbox"> Rodar passe final de revisao</label>
-        <label class="toggle-row"><input id="forceNew" type="checkbox"> Criar trabalho novo mesmo se ja existir estado</label>
+
+        <label class="toggle-row"><input id="retryForever" type="checkbox" checked> <span>Retentar ate concluir ou parar manualmente</span> <button class="info" data-help="retryForever" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="retryQc" type="checkbox" checked> <span>Refazer automaticamente cues com erro duro de QC</span> <button class="info" data-help="retryQc" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="contextPass" type="checkbox" checked> <span>Criar guia de contexto antes de traduzir</span> <button class="info" data-help="contextPass" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="polishPass" type="checkbox"> <span>Rodar passe final de revisao</span> <button class="info" data-help="polishPass" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="forceNew" type="checkbox"> <span>Criar trabalho novo mesmo se ja existir estado</span> <button class="info" data-help="forceNew" aria-label="Ajuda">i</button></label>
+
         <div class="actions">
-          <button id="doctor">Testar Bedrock</button>
-          <button class="primary" id="start">Iniciar ou retomar</button>
-          <button id="resume">Retomar selecionado</button>
-          <button class="danger" id="stop">Parar</button>
+          <div class="action-wrap">
+            <button id="doctor">Testar Bedrock</button>
+            <button class="info" data-help="doctor" aria-label="Ajuda">i</button>
+          </div>
+          <div class="action-wrap">
+            <button class="primary" id="start">Iniciar ou retomar</button>
+            <button class="info" data-help="start" aria-label="Ajuda">i</button>
+          </div>
+          <div class="action-wrap">
+            <button id="resume">Retomar selecionado</button>
+            <button class="info" data-help="resumeBtn" aria-label="Ajuda">i</button>
+          </div>
+          <div class="action-wrap">
+            <button class="danger" id="stop">Parar</button>
+            <button class="info" data-help="stop" aria-label="Ajuda">i</button>
+          </div>
         </div>
       </div>
       <div class="panel-head">
-        <h2>Trabalhos</h2>
+        <h2>Trabalhos <button class="info" data-help="jobs" aria-label="Ajuda">i</button></h2>
       </div>
       <div class="panel-body">
         <div id="jobs" class="jobs"></div>
       </div>
     </section>
+
     <section>
       <div class="panel-head">
-        <h2>Status</h2>
+        <h2>Status <button class="info" data-help="status" aria-label="Ajuda">i</button></h2>
         <span id="statusPill" class="pill">sem trabalho</span>
       </div>
       <div class="status-grid">
-        <div class="metric"><div class="value" id="mProgress">0%</div><div class="label">progresso</div></div>
-        <div class="metric"><div class="value" id="mBatch">-</div><div class="label">lote</div></div>
-        <div class="metric"><div class="value" id="mModel">-</div><div class="label">modelo atual</div></div>
-        <div class="metric"><div class="value" id="mErrors">0</div><div class="label">erros QC</div></div>
-        <div class="metric"><div class="value" id="mReview">0</div><div class="label">revisar</div></div>
+        <div class="metric"><div class="value" id="mProgress">0%</div><div class="label">progresso <button class="info" data-help="mProgress" aria-label="Ajuda">i</button></div></div>
+        <div class="metric"><div class="value" id="mBatch">-</div><div class="label">lote <button class="info" data-help="mBatch" aria-label="Ajuda">i</button></div></div>
+        <div class="metric"><div class="value" id="mModel">-</div><div class="label">modelo atual <button class="info" data-help="mModel" aria-label="Ajuda">i</button></div></div>
+        <div class="metric"><div class="value" id="mErrors">0</div><div class="label">erros QC <button class="info" data-help="mErrors" aria-label="Ajuda">i</button></div></div>
+        <div class="metric"><div class="value" id="mReview">0</div><div class="label">revisar <button class="info" data-help="mReview" aria-label="Ajuda">i</button></div></div>
       </div>
       <div class="bar"><div id="barFill"></div></div>
+      <div class="eta" id="eta"></div>
+
+      <div class="result" id="result"></div>
+
       <div class="panel-body">
-        <div class="small" id="paths"></div>
-        <div class="small" id="lastError"></div>
+        <div class="sub-head">Arquivos deste trabalho <button class="info" data-help="arquivos" aria-label="Ajuda">i</button></div>
+        <div class="paths" id="paths"></div>
+        <div class="alert-line" id="lastError"></div>
       </div>
+
       <div class="split">
         <div>
-          <div class="small" style="margin-bottom:6px;font-weight:700;">Log</div>
+          <div class="sub-head">Log <button class="info" data-help="log" aria-label="Ajuda">i</button></div>
           <div id="log" class="log"></div>
         </div>
         <div>
-          <div class="small" style="margin-bottom:6px;font-weight:700;">Lote atual</div>
+          <div class="sub-head">Lote atual <button class="info" data-help="preview" aria-label="Ajuda">i</button></div>
           <div id="preview" class="preview"></div>
         </div>
       </div>
     </section>
   </main>
   <script>
+    const HELP = {
+      painelEntrada: {
+        t: "Painel de entrada",
+        p: "Aqui voce escolhe a legenda e como ela vai ser traduzida. Os valores padrao ja funcionam bem: na pratica voce so precisa conferir a legenda selecionada e clicar em Iniciar ou retomar.",
+        e: "Mexer nos numeros so faz sentido se algo deu errado, por exemplo diminuir Legendas por lote quando um modelo insiste em devolver JSON quebrado."
+      },
+      refresh: {
+        t: "Atualizar",
+        p: "Rele a pasta base procurando arquivos .srt e recarrega a lista de trabalhos. Nao inicia, nao para e nao altera nenhuma traducao: e so uma releitura do disco.",
+        e: "Voce acabou de baixar a legenda de outro filme e copiou para a pasta. Ela nao aparece no seletor porque a pagina foi carregada antes. Clique em Atualizar e ela aparece."
+      },
+      file: {
+        t: "Legenda encontrada",
+        p: "Lista os arquivos .srt achados na pasta base do servidor. A ordem prioriza o arquivo que esta na raiz da pasta e evita deixar versoes SDH em primeiro lugar, porque SDH traz descricoes de som que nem sempre voce quer.",
+        e: "Numa pasta com <code>Filme.srt</code> e <code>Subs/Filme.en.SDH.srt</code>, o primeiro da lista sera <code>Filme.srt</code>."
+      },
+      path: {
+        t: "Ou caminho absoluto",
+        p: "Use quando a legenda estiver fora da pasta base. Se este campo estiver preenchido, ele manda e o seletor acima e ignorado. Deixe vazio para usar o seletor.",
+        e: "<code>/Users/voce/Downloads/Outro.Filme.2024.srt</code>. Tambem funciona apontar para uma legenda <code>.INCOMPLETO.srt</code> ja gerada: ele reconhece o trabalho antigo e continua de onde parou."
+      },
+      profile: {
+        t: "AWS profile",
+        p: "Nome do perfil configurado no AWS CLI, em <code>~/.aws/credentials</code>. E com essa credencial que o script chama o Bedrock.",
+        e: "Se estiver errado, a primeira chamada falha com erro de credencial. Rode <code>aws configure list-profiles</code> no terminal para ver os nomes disponiveis."
+      },
+      region: {
+        t: "Regiao",
+        p: "Regiao AWS onde o Bedrock sera chamado. O catalogo de modelos muda por regiao: um modelo que existe em uma pode nao existir em outra.",
+        e: "<code>us-east-1</code> e onde os modelos Claude e Nova responderam nesta conta. Trocar para uma regiao sem esses modelos faz todos falharem com ResourceNotFound."
+      },
+      models: {
+        t: "Modelos em ordem de fallback",
+        p: "Um ID por linha, na ordem em que serao tentados. Se o primeiro falhar todas as tentativas, ele cai para o segundo, e assim por diante. IDs que comecam com <code>us.</code> sao inference profiles, exigidos pelo Bedrock para varios modelos novos.",
+        e: "A ordem padrao poe o Claude Sonnet primeiro por ser o melhor tradutor, e deixa modelos menores embaixo como rede de seguranca. Esse mesmo fallback e o que permite o mecanismo de consenso: quando dois modelos diferentes devolvem o mesmo texto suspeito, a validacao aceita em vez de travar."
+      },
+      batchSize: {
+        t: "Legendas por lote",
+        p: "Quantas legendas vao em cada chamada ao modelo. Lote maior da mais contexto e usa menos chamadas, mas gera resposta mais longa, com mais risco de JSON cortado ou quebrado.",
+        e: "Com 28 legendas por lote, um filme de 2435 legendas vira 87 lotes, cerca de 1,5 minuto de filme por chamada. Se o log mostrar muito erro de JSON, baixe para 20."
+      },
+      batchChars: {
+        t: "Caracteres por lote",
+        p: "Teto de caracteres do lote. Ele fecha o lote antes de atingir Legendas por lote se as falas forem longas. Serve para o tamanho da resposta nao explodir em cenas de dialogo denso.",
+        e: "Com 28 legendas e 4300 caracteres, uma cena de falas longas pode fechar o lote em 20 legendas ao bater o limite de caracteres."
+      },
+      attempts: {
+        t: "Tentativas por modelo",
+        p: "Quantas vezes insistir no mesmo modelo antes de passar para o proximo da lista. Cada nova tentativa leva no prompt o motivo da recusa anterior, entao ela nao e apenas uma repeticao.",
+        e: "Com 3, o Claude Sonnet tenta 3 vezes; se as 3 falharem, a vez passa para o Claude Haiku."
+      },
+      timeout: {
+        t: "Timeout por chamada",
+        p: "Segundos de espera por uma resposta antes de considerar a chamada perdida. Lote grande e modelo lento precisam de mais tempo.",
+        e: "240s cobre um lote de 28 legendas com folga. Abaixo de 120s, lotes grandes podem ser cortados no meio e retentados a toa."
+      },
+      maxLines: {
+        t: "Maximo de linhas",
+        p: "Quantas linhas uma legenda pode ter na tela. O padrao da industria e 2: com 3 ou mais, a legenda cobre a imagem e fica cansativa.",
+        e: "Uma frase longa vira duas linhas equilibradas em vez de uma linha unica atravessando a tela inteira."
+      },
+      lineLength: {
+        t: "Caracteres por linha",
+        p: "Comprimento maximo de cada linha, contando so o texto visivel (tags como <code>&lt;i&gt;</code> nao contam). 42 e o valor usado nos guias de legendagem para portugues.",
+        e: "<code>Voce sempre diz isso quando algo esta errado.</code> tem 44 caracteres, entao e quebrado em duas linhas."
+      },
+      maxCps: {
+        t: "CPS maximo",
+        p: "Caracteres por segundo, ou seja, velocidade de leitura. Ate 17 e confortavel. Este limite nao e cobrado de forma absoluta: o aviso so aparece quando a traducao ficou mais de 15 por cento mais lenta de ler do que o original ja era.",
+        e: "Muita legenda comercial ja passa de 17 cps na fonte. Nesta legenda, 48 por cento dos cues em ingles ja eram assim. Se cobrassemos o limite absoluto, metade do filme viraria aviso e voce nao conseguiria achar o problema de verdade. Original a 25 cps e traducao a 26 cps nao avisa; de 15 para 30 cps avisa."
+      },
+      qcRounds: {
+        t: "Rodadas de reparo QC",
+        p: "Depois de traduzir tudo, o QC procura erros duros. Este numero diz quantas vezes ele pode refazer os lotes afetados antes de desistir e marcar o arquivo como incompleto.",
+        e: "Com 2 rodadas: se um cue continuar com tag <code>&lt;i&gt;</code> quebrada depois de 2 tentativas, o arquivo final sai como <code>.INCOMPLETO.srt</code> em vez de <code>.OK.srt</code>."
+      },
+      retryForever: {
+        t: "Retentar ate concluir ou parar manualmente",
+        p: "Ligado, o trabalho nunca desiste sozinho de um lote: ele espera com backoff exponencial e volta a tentar ate voce clicar em Parar. Desligado, o lote que falhar e marcado com erro e a traducao segue adiante.",
+        e: "O Bedrock comeca a limitar chamadas por excesso de uso. Ligado, ele espera e continua sozinho. Desligado, aquele trecho do filme fica sem traducao no arquivo final."
+      },
+      retryQc: {
+        t: "Refazer cues com erro duro de QC",
+        p: "Ao terminar, refaz automaticamente os lotes que contem cues reprovados no QC. Desligue apenas se voce quiser ver o resultado bruto do modelo, sem nenhuma correcao posterior.",
+        e: "Um cue voltou com o marcador musical perdido. Com esta opcao ligada, o lote inteiro daquele cue e refeito antes de fechar o arquivo."
+      },
+      contextPass: {
+        t: "Criar guia de contexto antes de traduzir",
+        p: "Faz uma chamada extra no comeco que le amostras da legenda inteira e monta um guia do filme: tom, registro, nomes recorrentes e formas de tratamento. Esse guia acompanha todos os lotes e e o que mantem a traducao coerente do inicio ao fim.",
+        e: "E o que evita que o mesmo personagem seja tratado por voce no comeco e por tu no fim, ou que um apelido mude de traducao no meio do filme. Custa uma chamada a mais e vale a pena."
+      },
+      polishPass: {
+        t: "Rodar passe final de revisao",
+        p: "Uma segunda passada por todos os lotes, agora revisando a traducao ja feita em vez de traduzir do zero. Praticamente dobra o tempo e o custo.",
+        e: "E o passe que tende a pegar deslizes de sentido, como um <code>chat room</code> traduzido como grupo de e-mail. Use quando a legenda for para valer e o tempo nao importar."
+      },
+      forceNew: {
+        t: "Criar trabalho novo mesmo se ja existir estado",
+        p: "Ignora todo o progresso salvo e comeca do zero. Cuidado: o trabalho anterior daquela legenda deixa de ser continuado.",
+        e: "Voce trocou a lista de modelos e quer o filme inteiro traduzido pelo modelo novo, em vez de aproveitar o que ja foi feito pelo antigo."
+      },
+      doctor: {
+        t: "Testar Bedrock",
+        p: "Faz uma chamada real e minima (pede so a palavra OK) para CADA modelo da lista, usando o profile e a regiao preenchidos aqui. Serve como checagem de pre-voo antes de gastar tempo num filme inteiro.",
+        e: "Ele garante tres coisas: a credencial do profile e valida, a regiao responde, e a sua conta tem acesso liberado aquele modelo. Ele NAO avalia qualidade de traducao. Se voltar <code>AccessDeniedException</code>, o modelo precisa ser liberado no console da AWS em Amazon Bedrock, Model access."
+      },
+      start: {
+        t: "Iniciar ou retomar",
+        p: "O botao principal. Se ja existe trabalho salvo para a legenda escolhida, ele continua exatamente de onde parou. Se nao existe, cria um trabalho novo. E seguro clicar duas vezes: um trabalho ja rodando nao e duplicado.",
+        e: "Voce traduziu 60 por cento ontem e fechou tudo. Hoje escolhe a mesma legenda e clica aqui: ele reconhece os lotes ja prontos e comeca do lote seguinte, sem retraduzir nada."
+      },
+      resumeBtn: {
+        t: "Retomar selecionado",
+        p: "Retoma o trabalho que estiver marcado na lista Trabalhos, e nao a legenda do seletor. Util quando o arquivo de origem nao esta mais na pasta base ou quando ha varios trabalhos e voce quer continuar um especifico.",
+        e: "A lista mostra um trabalho com status <code>stalled</code>, que significa progresso salvo mas processo morto. Selecione o cartao dele e clique aqui para voltar de onde parou."
+      },
+      stop: {
+        t: "Parar",
+        p: "Pede uma parada limpa. A chamada que ja esta no ar termina, o progresso e gravado em disco e o trabalho para com status <code>stopped</code>. Nada do que ja foi traduzido se perde.",
+        e: "A parada nao e instantanea: ele pode levar alguns segundos ate a chamada em andamento voltar. Depois e so clicar em Iniciar ou retomar para continuar."
+      },
+      jobs: {
+        t: "Trabalhos",
+        p: "Todo trabalho ja iniciado nesta pasta, com status e progresso. Clique num cartao para ver o status, o log e o lote atual dele no painel da direita.",
+        e: "Status possiveis: <code>running</code> em execucao, <code>stopped</code> parado por voce, <code>stalled</code> progresso salvo mas o processo morreu, <code>complete</code> terminou sem erro, <code>incomplete</code> terminou com pendencias, <code>failed</code> falhou."
+      },
+      status: {
+        t: "Status",
+        p: "Situacao do trabalho selecionado, atualizada sozinha a cada 2,5 segundos. Voce nao precisa recarregar a pagina.",
+        e: "Se aparecer <code>stalled</code>, o progresso esta salvo mas ninguem esta traduzindo: o processo do servidor caiu. Clique em Retomar selecionado. Se aparecer <code>lote insistindo</code>, um lote entrou no segundo ciclo de modelos e vale olhar o log."
+      },
+      mProgress: {
+        t: "Progresso",
+        p: "Porcentagem de legendas com traducao aceita, e nao porcentagem de lotes. Uma legenda so conta aqui depois de passar por toda a validacao.",
+        e: "1736 de 2435 legendas prontas mostram 71 por cento."
+      },
+      mBatch: {
+        t: "Lote",
+        p: "Qual lote esta sendo traduzido agora e quantos lotes o filme tem no total. Mostra um traco quando nao ha lote em andamento.",
+        e: "<code>63/87</code> significa que ele esta no lote 63 de 87."
+      },
+      mModel: {
+        t: "Modelo atual",
+        p: "Qual modelo esta atendendo o lote neste momento. Se ele mudar sozinho para um modelo mais abaixo na lista, e porque o de cima falhou as tentativas.",
+        e: "Ver <code>nova-pro</code> aqui quando o topo da lista e o Sonnet indica que o Sonnet falhou e o fallback entrou."
+      },
+      mErrors: {
+        t: "Erros QC",
+        p: "Legendas reprovadas em checagem dura: texto vazio, recusa do modelo, tag quebrada, marcador musical perdido, token protegido ausente. Enquanto este numero for maior que zero, o arquivo final sai como <code>.INCOMPLETO.srt</code>.",
+        e: "Este numero nao inclui avisos de legibilidade como linha longa ou leitura rapida. Aviso nao bloqueia o arquivo."
+      },
+      mReview: {
+        t: "Revisar",
+        p: "Legendas que a heuristica marcou como suspeitas de nao terem sido traduzidas, mas que dois modelos diferentes devolveram iguais. Nesse caso a evidencia aponta para a heuristica errada, e o texto e aceito com marca de revisao em vez de travar o lote.",
+        e: "Refrao de musica como <code>Guli guli guli guli ram sam sam</code> deve mesmo ficar igual ao original. Ele entra aqui para voce dar uma conferida, mas nao impede o <code>.OK.srt</code>."
+      },
+      arquivos: {
+        t: "Arquivos gerados",
+        p: "Tudo fica ao lado da legenda original, na mesma pasta do filme. Sao tres coisas: a legenda traduzida, um arquivo sidecar ao lado dela, e a pasta de estado <code>.srt_translator_jobs/</code>.",
+        e: "A legenda traduzida tem o sufixo que indica o resultado: <code>.pt-BR.EM_ANDAMENTO.srt</code> enquanto roda, <code>.pt-BR.OK.srt</code> quando termina sem erro duro, <code>.pt-BR.INCOMPLETO.srt</code> quando sobrou pendencia. Todos sao SRT normais em UTF-8, com o mesmo numero de legendas e os mesmos tempos do original: da para abrir direto no VLC. Ao terminar, os arquivos antigos daquele trabalho sao apagados para sobrar so a legenda boa. O <code>.translator-state.json</code> ao lado e o que permite voce arrastar a legenda de volta e ele reconhecer o trabalho. Dentro de <code>.srt_translator_jobs/</code> ficam o estado, as traducoes por id, o log em jsonl e o <code>quality_report.json</code> com o detalhe de cada problema."
+      },
+      log: {
+        t: "Log",
+        p: "Eventos do trabalho em ordem cronologica, gravados tambem em disco em <code>events.jsonl</code>. Amarelo e aviso, vermelho e erro, verde e lote concluido.",
+        e: "Uma sequencia saudavel e: Iniciando traducao do lote N, Chamando Bedrock, Resposta validada, Lote N concluido. Aviso repetido no mesmo lote indica que a validacao esta recusando a resposta."
+      },
+      preview: {
+        t: "Lote atual",
+        p: "As legendas do lote em andamento. Para cada uma aparece o texto original em cinza e, abaixo, a traducao quando ela ja existe.",
+        e: "E aqui que voce ve a qualidade saindo em tempo real, sem precisar abrir o arquivo."
+      }
+    };
+
     const defaultModels = [
       "us.anthropic.claude-sonnet-4-6",
       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -2998,12 +3388,123 @@ UI_HTML = r"""<!doctype html>
       "meta.llama3-70b-instruct-v1:0"
     ];
     let selectedJob = null;
+    let lastStatus = {};
+    let lastDone = null;
+    let rateSamples = [];
     document.querySelector("#models").value = defaultModels.join("\n");
 
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+
+    /* ---------- popover de ajuda ---------- */
+    const helpBox = document.querySelector("#help");
+    let pinned = null;
+    let hideTimer = null;
+
+    function renderHelp(key) {
+      const h = HELP[key];
+      if (!h) return false;
+      helpBox.innerHTML = `<h4>${escapeHtml(h.t)}</h4><p>${h.p}</p>` +
+        (h.e ? `<div class="ex"><b>Na pratica</b>${h.e}</div>` : "") +
+        `<p class="pin-hint">Clique no i para fixar. Esc fecha.</p>`;
+      return true;
+    }
+    function placeHelp(anchor) {
+      helpBox.classList.add("show");
+      const a = anchor.getBoundingClientRect();
+      const b = helpBox.getBoundingClientRect();
+      let left = a.left + a.width / 2 - b.width / 2;
+      left = Math.max(10, Math.min(left, window.innerWidth - b.width - 10));
+      let top = a.bottom + 8;
+      if (top + b.height > window.innerHeight - 10) {
+        top = a.top - b.height - 8;
+        if (top < 10) top = Math.max(10, window.innerHeight - b.height - 10);
+      }
+      helpBox.style.left = left + "px";
+      helpBox.style.top = top + "px";
+    }
+    function openHelp(anchor, key) {
+      if (!renderHelp(key)) return;
+      placeHelp(anchor);
+    }
+    function closeHelp() {
+      helpBox.classList.remove("show");
+      if (pinned) { pinned.classList.remove("open"); pinned = null; }
+    }
+    document.addEventListener("mouseover", ev => {
+      const btn = ev.target.closest(".info[data-help]");
+      if (!btn || pinned) return;
+      clearTimeout(hideTimer);
+      openHelp(btn, btn.dataset.help);
+    });
+    document.addEventListener("mouseout", ev => {
+      const btn = ev.target.closest(".info[data-help]");
+      if (!btn || pinned) return;
+      hideTimer = setTimeout(() => { if (!pinned) helpBox.classList.remove("show"); }, 160);
+    });
+    helpBox.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+    helpBox.addEventListener("mouseleave", () => { if (!pinned) helpBox.classList.remove("show"); });
+    document.addEventListener("click", ev => {
+      const btn = ev.target.closest(".info[data-help]");
+      if (btn) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (pinned === btn) { closeHelp(); return; }
+        if (pinned) pinned.classList.remove("open");
+        pinned = btn;
+        btn.classList.add("open");
+        openHelp(btn, btn.dataset.help);
+        return;
+      }
+      if (!ev.target.closest("#help")) closeHelp();
+    });
+    document.addEventListener("keydown", ev => { if (ev.key === "Escape") closeHelp(); });
+    window.addEventListener("resize", closeHelp);
+
+    /* ---------- toasts ---------- */
+    function toast(title, body, kind, opts) {
+      opts = opts || {};
+      const box = document.querySelector("#toasts");
+      const el = document.createElement("div");
+      el.className = "toast " + (kind || "info");
+      el.innerHTML = `<div class="t-head"><strong>${escapeHtml(title)}</strong>
+          <button class="t-close" aria-label="Fechar">&times;</button></div>
+        ${body ? `<div class="t-body">${escapeHtml(body)}</div>` : ""}
+        ${opts.copy ? `<div class="t-actions"><button data-copy="1">Copiar caminho</button></div>` : ""}`;
+      el.querySelector(".t-close").onclick = () => el.remove();
+      const cp = el.querySelector("[data-copy]");
+      if (cp) cp.onclick = () => copyText(opts.copy, cp);
+      box.appendChild(el);
+      const ms = opts.timeout === 0 ? 0 : (opts.timeout || (kind === "error" ? 14000 : 7000));
+      if (ms) setTimeout(() => el.remove(), ms);
+      return el;
+    }
+    async function copyText(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text);
+        if (btn) { const old = btn.textContent; btn.textContent = "Copiado!"; setTimeout(() => btn.textContent = old, 1600); }
+      } catch (e) {
+        toast("Nao consegui copiar", "O navegador bloqueou o acesso a area de transferencia. Selecione o texto manualmente.", "warn");
+      }
+    }
+    function busy(sel, on) {
+      const b = document.querySelector(sel);
+      if (!b) return;
+      b.classList.toggle("busy", !!on);
+      b.disabled = !!on;
+    }
+
+    /* ---------- api ---------- */
     async function api(path, opts) {
-      const res = await fetch(path, opts);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erro HTTP");
+      let res, data;
+      try {
+        res = await fetch(path, opts);
+      } catch (e) {
+        throw new Error("Nao consegui falar com o servidor local. Ele ainda esta rodando no terminal?");
+      }
+      try { data = await res.json(); } catch (e) { throw new Error("Resposta invalida do servidor (HTTP " + res.status + ")."); }
+      if (!res.ok) throw new Error(data.error || ("Erro HTTP " + res.status));
       return data;
     }
     function formConfig() {
@@ -3029,9 +3530,12 @@ UI_HTML = r"""<!doctype html>
         force_new: document.querySelector("#forceNew").checked
       };
     }
+
+    /* ---------- acoes ---------- */
     async function refreshFiles() {
       const data = await api("/api/files");
       const select = document.querySelector("#file");
+      const keep = select.value;
       select.innerHTML = "";
       for (const f of data.files) {
         const opt = document.createElement("option");
@@ -3039,14 +3543,16 @@ UI_HTML = r"""<!doctype html>
         opt.textContent = f.name;
         select.appendChild(opt);
       }
-      if (!document.querySelector("#path").value && data.files[0]) {
-        document.querySelector("#path").placeholder = data.files[0].path;
-      }
+      if (keep) select.value = keep;
+      return data.files.length;
     }
     async function refreshJobs() {
       const data = await api("/api/jobs");
       const box = document.querySelector("#jobs");
       box.innerHTML = "";
+      if (!data.jobs.length) {
+        box.innerHTML = "<div class='empty'>Nenhum trabalho ainda. Escolha uma legenda e clique em Iniciar ou retomar.</div>";
+      }
       for (const job of data.jobs) {
         const div = document.createElement("div");
         div.className = "job" + (job.job_id === selectedJob ? " active" : "");
@@ -3054,58 +3560,173 @@ UI_HTML = r"""<!doctype html>
         const pct = job.total_cues ? Math.round((job.done_cues || 0) * 100 / job.total_cues) : 0;
         div.innerHTML = `<strong>${escapeHtml(shortPath(job.source_path || ""))}</strong>
           <span class="pill ${escapeHtml(job.status || "")}">${escapeHtml(job.status || "-")}</span>
-          <div class="small">${pct}% · ${escapeHtml(job.updated_at || "")}</div>`;
+          <div class="small">${pct}% &middot; ${job.done_cues || 0}/${job.total_cues || 0} legendas &middot; ${escapeHtml(job.updated_at || "")}</div>`;
         box.appendChild(div);
+        announceStatus(job);
       }
       if (!selectedJob && data.jobs[0]) selectedJob = data.jobs[0].job_id;
+      syncButtons(data.jobs);
+    }
+    function syncButtons(jobs) {
+      const cur = (jobs || []).find(j => j.job_id === selectedJob);
+      const running = cur && cur.status === "running";
+      document.querySelector("#stop").disabled = !running;
+      document.querySelector("#resume").disabled = !selectedJob || running;
+    }
+    function announceStatus(job) {
+      const prev = lastStatus[job.job_id];
+      lastStatus[job.job_id] = job.status;
+      if (prev === undefined || prev === job.status) return;
+      const name = shortPath(job.source_path || "");
+      if (job.status === "complete") {
+        toast("Traducao concluida", `${name} — arquivo pronto em ${fileName(job.output)}`, "success", {copy: job.output, timeout: 0});
+      } else if (job.status === "incomplete") {
+        toast("Terminou com pendencias", `${name} — saiu como ${fileName(job.output)}. Repasse esse arquivo e clique em Iniciar ou retomar para ele completar o que faltou.`, "warn", {timeout: 0});
+      } else if (job.status === "failed") {
+        toast("O trabalho falhou", job.last_error || name, "error", {timeout: 0});
+      } else if (job.status === "stalled") {
+        toast("Processo parou sozinho", `${name} — o progresso esta salvo. Clique em Retomar selecionado para continuar.`, "warn", {timeout: 0});
+      }
     }
     async function startJob() {
-      const data = await api("/api/start", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(formConfig())
-      });
-      selectedJob = data.job_id;
-      await refreshJobs();
-      await refreshJob();
+      const cfg = formConfig();
+      if (!cfg.path) { toast("Escolha uma legenda", "Nenhum arquivo .srt selecionado nem caminho informado.", "warn"); return; }
+      busy("#start", true);
+      try {
+        const data = await api("/api/start", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(cfg)});
+        selectedJob = data.job_id;
+        lastStatus[data.job_id] = "running";
+        toast("Trabalho iniciado", `${fileName(cfg.path)} — acompanhe pelo log abaixo. Pode fechar esta aba: o servidor continua traduzindo.`, "success");
+      } finally { busy("#start", false); }
+      // refresh separado: se ele falhar, o trabalho JA comecou e dizer
+      // "nao consegui iniciar" seria mentira.
+      try { await refreshJobs(); await refreshJob(); }
+      catch (e) { toast("Trabalho rodando, mas a tela nao atualizou", e.message, "warn"); }
     }
     async function resumeJob() {
-      if (!selectedJob) return;
+      if (!selectedJob) { toast("Nenhum trabalho selecionado", "Clique num cartao na lista Trabalhos primeiro.", "warn"); return; }
       const cfg = formConfig();
       cfg.job_id = selectedJob;
-      const data = await api("/api/resume", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(cfg)
-      });
-      selectedJob = data.job_id;
-      await refreshJobs();
-      await refreshJob();
+      busy("#resume", true);
+      try {
+        const data = await api("/api/resume", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(cfg)});
+        selectedJob = data.job_id;
+        lastStatus[data.job_id] = "running";
+        toast("Trabalho retomado", "Ele continua do ponto em que parou; nada ja traduzido sera refeito.", "success");
+      } finally { busy("#resume", false); }
+      try { await refreshJobs(); await refreshJob(); }
+      catch (e) { toast("Trabalho rodando, mas a tela nao atualizou", e.message, "warn"); }
     }
     async function stopJob() {
       if (!selectedJob) return;
-      await api("/api/stop", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({job_id: selectedJob})
-      });
-      await refreshJob();
+      busy("#stop", true);
+      try {
+        await api("/api/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({job_id: selectedJob})});
+        toast("Parada solicitada", "A chamada em andamento vai terminar antes de parar. O progresso ja esta salvo.", "info");
+        await refreshJob();
+      } finally { busy("#stop", false); }
     }
     async function runDoctor() {
       const cfg = formConfig();
-      const data = await api("/api/doctor", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(cfg)
-      });
-      const lines = data.results.map(r => `${r.ok ? "OK" : "FALHA"} ${shortModel(r.model)}${r.error ? ": " + r.error.slice(0, 180) : ""}`);
-      alert(`Modelos OK: ${data.ok_count}/${data.results.length}\n\n` + lines.join("\n"));
+      busy("#doctor", true);
+      const pending = toast("Testando Bedrock...", "Fazendo uma chamada minima para cada modelo da lista.", "info", {timeout: 0});
+      try {
+        const data = await api("/api/doctor", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(cfg)});
+        pending.remove();
+        const bad = data.results.filter(r => !r.ok);
+        if (data.ok_count === 0) {
+          toast("Nenhum modelo respondeu", `Confira o profile (${cfg.profile}) e a regiao (${cfg.region}). Primeiro erro: ` + ((bad[0] && bad[0].error) || "").slice(0, 220), "error", {timeout: 0});
+        } else if (bad.length) {
+          toast(`${data.ok_count} de ${data.results.length} modelos OK`, "Sem acesso: " + bad.map(r => shortModel(r.model)).join(", ") + ". Da para traduzir assim mesmo; libere os demais em Amazon Bedrock, Model access, se quiser mais fallback.", "warn", {timeout: 0});
+        } else {
+          toast("Bedrock pronto", `Todos os ${data.results.length} modelos responderam com o profile ${cfg.profile} em ${cfg.region}.`, "success");
+        }
+      } finally { pending.remove(); busy("#doctor", false); }
     }
     async function refreshJob() {
       if (!selectedJob) return;
       const data = await api("/api/job?id=" + encodeURIComponent(selectedJob));
       renderJob(data.job);
     }
+
+    /* ---------- render ---------- */
+    function fileName(p) { return (p || "").split("/").pop() || "-"; }
+    function dirName(p) { const a = (p || "").split("/"); a.pop(); return a.join("/"); }
+    function shortPath(p) { if (!p) return ""; const parts = p.split("/"); return parts.slice(-2).join("/"); }
+    function shortModel(m) { return (m || "").replace(/^global\./, "").replace(/^us\./, ""); }
+
+    function estimateEta(job) {
+      const done = job.done_cues || 0, total = job.total_cues || 0;
+      if (job.status !== "running" || !total) { rateSamples = []; lastDone = done; return ""; }
+      const now = Date.now();
+      if (lastDone !== null && done > lastDone) {
+        rateSamples.push({t: now, d: done});
+        if (rateSamples.length > 12) rateSamples.shift();
+      }
+      lastDone = done;
+      if (rateSamples.length < 2) return `${done} de ${total} legendas traduzidas. Calculando tempo restante...`;
+      const a = rateSamples[0], b = rateSamples[rateSamples.length - 1];
+      const perSec = (b.d - a.d) / Math.max(1, (b.t - a.t) / 1000);
+      if (perSec <= 0) return `${done} de ${total} legendas traduzidas.`;
+      const secs = Math.round((total - done) / perSec);
+      const mins = Math.floor(secs / 60);
+      const label = mins >= 1 ? `${mins} min ${secs % 60}s` : `${secs}s`;
+      return `${done} de ${total} legendas traduzidas &middot; faltam cerca de ${label}`;
+    }
+
+    function pathLine(key, value, help) {
+      if (!value) return "";
+      return `<div class="pathline"><span class="pk">${escapeHtml(key)}</span>
+        <span class="pv">${escapeHtml(value)}</span>
+        <button class="copy" data-path="${escapeHtml(value)}">copiar</button></div>`;
+    }
+
+    function renderResult(job) {
+      const box = document.querySelector("#result");
+      const out = job.final_output_path || job.last_written_output || "";
+      const q = job.quality || {};
+      if (job.status === "complete") {
+        box.className = "result show ok";
+        box.innerHTML = `<h3>Traducao concluida</h3>
+          <div class="sub">${job.total_cues || 0} legendas traduzidas, nenhum erro duro de QC. O arquivo esta pronto para usar.</div>
+          <div class="filebox"><div class="fb-main"><div class="fb-name">${escapeHtml(fileName(out))}</div>
+            <div class="fb-dir">${escapeHtml(dirName(out))}</div></div>
+            <button data-path="${escapeHtml(out)}">Copiar caminho</button></div>
+          <ul>
+            <li>E um SRT normal em UTF-8: abra no VLC pelo menu Legenda, Adicionar arquivo de legenda.</li>
+            <li>Mesma quantidade de legendas e mesmos tempos do original, entao sincroniza igual.</li>
+            ${job.review_cues ? `<li><b>${job.review_cues}</b> legendas foram aceitas por consenso entre modelos e valem uma conferida.</li>` : ""}
+            ${q.warning_cues ? `<li>${q.warning_cues} avisos de legibilidade no relatorio de qualidade. Avisos nao bloqueiam o arquivo.</li>` : ""}
+          </ul>`;
+      } else if (job.status === "incomplete") {
+        box.className = "result show warn";
+        box.innerHTML = `<h3>Terminou com pendencias</h3>
+          <div class="sub">${job.last_error || "Sobraram legendas sem traducao aceita."}</div>
+          <div class="filebox"><div class="fb-main"><div class="fb-name">${escapeHtml(fileName(out))}</div>
+            <div class="fb-dir">${escapeHtml(dirName(out))}</div></div>
+            <button data-path="${escapeHtml(out)}">Copiar caminho</button></div>
+          <ul>
+            <li>O sufixo <b>INCOMPLETO</b> no nome e o aviso de que faltou coisa.</li>
+            <li>As legendas que faltaram ficam marcadas dentro do arquivo com <code>[TRADUCAO_PENDENTE]</code>.</li>
+            <li>Para completar: deixe esta legenda selecionada e clique em <b>Iniciar ou retomar</b>. Ele refaz so o que faltou e, ao terminar, troca o arquivo por um <code>.OK.srt</code>.</li>
+          </ul>`;
+      } else if (job.status === "failed") {
+        box.className = "result show bad";
+        box.innerHTML = `<h3>O trabalho falhou</h3>
+          <div class="sub">${escapeHtml(job.last_error || "Erro nao identificado.")}</div>
+          <ul><li>Clique em <b>Testar Bedrock</b> para checar credencial, regiao e acesso aos modelos.</li>
+          <li>Nada do que ja foi traduzido se perdeu: depois de resolver, use <b>Retomar selecionado</b>.</li></ul>`;
+      } else if (job.status === "stalled") {
+        box.className = "result show warn";
+        box.innerHTML = `<h3>O processo parou sozinho</h3>
+          <div class="sub">O progresso esta salvo em disco, mas ninguem esta traduzindo agora. Normalmente o servidor foi encerrado.</div>
+          <ul><li>Clique em <b>Retomar selecionado</b> para continuar de onde parou.</li></ul>`;
+      } else {
+        box.className = "result";
+        box.innerHTML = "";
+      }
+    }
+
     function renderJob(job) {
       const done = job.done_cues || 0;
       const total = job.total_cues || 0;
@@ -3113,28 +3734,50 @@ UI_HTML = r"""<!doctype html>
       document.querySelector("#mProgress").textContent = pct + "%";
       document.querySelector("#barFill").style.width = pct + "%";
       const cur = job.current || {};
-      document.querySelector("#mBatch").textContent = cur.batch ? `${cur.batch}/${job.total_batches || "?"}` : "-";
+      document.querySelector("#mBatch").textContent = cur.batch ? `${cur.batch}/${job.total_batches || "?"}` : (job.total_batches ? `-/${job.total_batches}` : "-");
       document.querySelector("#mModel").textContent = cur.model ? shortModel(cur.model) : "-";
       document.querySelector("#mErrors").textContent = job.error_cues || 0;
       document.querySelector("#mReview").textContent = job.review_cues || 0;
+
       const pill = document.querySelector("#statusPill");
       pill.textContent = job.stuck_batch ? `${job.status || "-"} · lote insistindo` : (job.status || "-");
       pill.className = "pill " + (job.status || "");
+      document.querySelector("#eta").innerHTML = estimateEta(job);
+
+      renderResult(job);
+
       const q = job.quality || {};
-      document.querySelector("#paths").textContent = `Fonte: ${job.source_path || "-"} | Saida: ${job.final_output_path || job.last_written_output || "-"} | Pendentes: ${job.pending_cues || q.pending_cues || 0} | QC avisos: ${job.warning_cues || q.warning_cues || 0} | Relatorio: ${job.quality_report_path || "-"}`;
-      document.querySelector("#lastError").textContent = job.last_error ? `Ultimo erro: ${job.last_error}` : "";
+      const usage = job.usage || {};
+      document.querySelector("#paths").innerHTML =
+        pathLine("Original", job.source_path) +
+        pathLine("Traduzida", job.final_output_path || job.last_written_output) +
+        pathLine("Relatorio", job.quality_report_path) +
+        `<div class="pathline"><span class="pk">Numeros</span><span class="pv">${done}/${total} traduzidas &middot; ${job.pending_cues || q.pending_cues || 0} pendentes &middot; ${job.error_cues || 0} erros &middot; ${job.warning_cues || q.warning_cues || 0} avisos${usage.totalTokens ? ` &middot; ${Number(usage.totalTokens).toLocaleString("pt-BR")} tokens` : ""}</span></div>`;
+
+      const err = document.querySelector("#lastError");
+      const showErr = job.last_error && job.status !== "complete";
+      err.className = "alert-line" + (showErr ? " show" : "");
+      err.textContent = showErr ? job.last_error : "";
+
       const log = document.querySelector("#log");
-      log.textContent = (job.log_tail || []).map(e => `[${e.ts || ""}] ${e.level || "INFO"} ${e.message || ""}${formatEvent(e)}`).join("\n");
-      log.scrollTop = log.scrollHeight;
+      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+      log.innerHTML = (job.log_tail || []).map(e => {
+        const lvl = e.level || "INFO";
+        const good = /concluido|sucesso|validada|pronto/i.test(e.message || "") ? " good" : "";
+        return `<div class="ln ${lvl}${good}"><span class="ts">${escapeHtml((e.ts || "").slice(11, 19))}</span> ${escapeHtml(e.message || "")}${escapeHtml(formatEvent(e))}</div>`;
+      }).join("");
+      if (atBottom) log.scrollTop = log.scrollHeight;
+
       const preview = document.querySelector("#preview");
       const items = (job.preview && job.preview.items) || [];
-      preview.innerHTML = items.length ? items.map(renderCue).join("") : "<div class='small'>Sem lote ativo.</div>";
+      preview.innerHTML = items.length ? items.map(renderCue).join("") : "<div class='empty'>Sem lote ativo no momento.</div>";
     }
     function renderCue(item) {
+      const st = item.status || "";
       return `<div class="cue">
-        <div class="meta">#${item.id} · ${escapeHtml(item.time || "")} · ${escapeHtml(item.status || "")}</div>
-        <pre>${escapeHtml(item.source || "")}</pre>
-        <pre>${escapeHtml(item.translation || "")}</pre>
+        <div class="meta">#${item.id} &middot; ${escapeHtml(item.time || "")} &middot; <span class="tag ${escapeHtml(st)}">${escapeHtml(st)}</span></div>
+        <pre class="src">${escapeHtml(item.source || "")}</pre>
+        ${item.translation ? `<pre>${escapeHtml(item.translation)}</pre>` : ""}
       </div>`;
     }
     function formatEvent(e) {
@@ -3144,28 +3787,30 @@ UI_HTML = r"""<!doctype html>
       if (e.attempt) parts.push("tentativa=" + e.attempt);
       if (e.sleep) parts.push("sleep=" + e.sleep + "s");
       if (e.error) parts.push("erro=" + String(e.error).slice(0, 220));
-      return parts.length ? " | " + parts.join(" ") : "";
+      return parts.length ? "  | " + parts.join(" ") : "";
     }
-    function shortPath(p) {
-      if (!p) return "";
-      const parts = p.split("/");
-      return parts.slice(-2).join("/");
-    }
-    function shortModel(m) {
-      return (m || "").replace(/^global\./, "").replace(/^us\./, "");
-    }
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-    }
-    document.querySelector("#refresh").onclick = async () => { await refreshFiles(); await refreshJobs(); await refreshJob(); };
-    document.querySelector("#start").onclick = () => startJob().catch(err => alert(err.message));
-    document.querySelector("#resume").onclick = () => resumeJob().catch(err => alert(err.message));
-    document.querySelector("#stop").onclick = () => stopJob().catch(err => alert(err.message));
-    document.querySelector("#doctor").onclick = () => runDoctor().catch(err => alert(err.message));
+
+    document.addEventListener("click", ev => {
+      const b = ev.target.closest("[data-path]");
+      if (b) copyText(b.dataset.path, b);
+    });
+    document.querySelector("#refresh").onclick = async () => {
+      busy("#refresh", true);
+      try {
+        const n = await refreshFiles(); await refreshJobs(); await refreshJob();
+        toast("Lista atualizada", `${n} legenda(s) encontradas na pasta base. Nenhuma traducao foi alterada.`, "info", {timeout: 4000});
+      } catch (e) { toast("Falha ao atualizar", e.message, "error"); }
+      finally { busy("#refresh", false); }
+    };
+    document.querySelector("#start").onclick = () => startJob().catch(err => toast("Nao consegui iniciar", err.message, "error"));
+    document.querySelector("#resume").onclick = () => resumeJob().catch(err => toast("Nao consegui retomar", err.message, "error"));
+    document.querySelector("#stop").onclick = () => stopJob().catch(err => toast("Nao consegui parar", err.message, "error"));
+    document.querySelector("#doctor").onclick = () => runDoctor().catch(err => toast("Teste do Bedrock falhou", err.message, "error"));
+
     (async function boot() {
-      await refreshFiles();
-      await refreshJobs();
-      await refreshJob();
+      try {
+        await refreshFiles(); await refreshJobs(); await refreshJob();
+      } catch (e) { toast("Falha ao carregar", e.message, "error"); }
       setInterval(() => { refreshJobs().then(refreshJob).catch(() => {}); }, 2500);
     })();
   </script>
