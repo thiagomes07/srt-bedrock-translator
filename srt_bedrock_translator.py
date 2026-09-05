@@ -7,7 +7,7 @@ No third-party Python packages are required. The script provides:
 - A local web UI for choosing .srt files and watching logs/progress.
 - Strict JSON contracts for LLM responses.
 - Batch translation with previous/current/next context.
-- Persistent state so interrupted jobs can be resumed.
+- Persistent state só interrupted jobs can be resumed.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ LOCAL_CONFIG_NAME = "srt_translator.local.json"
 
 
 def local_defaults() -> dict[str, Any]:
-    """Le preferencias da maquina, para o repositorio nao carregar dado de ninguem.
+    """Le preferencias da maquina, para o repositorio não carregar dado de ninguem.
 
     Ordem: $SRT_TRANSLATOR_CONFIG, arquivo ao lado do script, depois ~/.config.
     O arquivo ao lado do script esta no .gitignore de proposito.
@@ -80,15 +80,15 @@ DEFAULT_MODELS = [
 ]
 
 # Quantos modelos distintos precisam concordar no mesmo texto suspeito para que a
-# heuristica de qualidade seja considerada errada e a traducao seja aceita.
+# heurística de qualidade seja considerada errada e a tradução seja aceita.
 SOFT_CONSENSUS_MODELS = 2
 
-# Quanto a traducao pode ficar mais lenta de ler que a fonte antes de virar aviso.
+# Quanto a tradução pode ficar mais lenta de ler que a fonte antes de virar aviso.
 # Medido num filme real: a expansao PT/EN tem mediana 0.97x e p90 1.19x, entao um
 # limiar de 1.15x ficava abaixo da variacao normal e marcava 8% do filme sem motivo.
 CPS_REGRESSION_RATIO = 1.35
 
-# Bump quando as regras de QC mudarem, para relatorios antigos serem recalculados.
+# Bump quando as regras de QC mudarem, para relatórios antigos serem recalculados.
 QUALITY_REPORT_VERSION = 3
 
 TIME_RE = re.compile(
@@ -101,9 +101,9 @@ REFUSAL_RE = re.compile(
     r"("
     r"\b(?:as an ai|as a language model|como (?:modelo|uma ia|um assistente)|sou uma ia)\b|"
     r"\b(?:i(?:'m| am) sorry|sorry|desculpe|lamento)\b.{0,140}"
-    r"\b(?:can't|cannot|can not|unable|not able|nao posso|não posso|nao consigo|não consigo)\b.{0,140}"
+    r"\b(?:can't|cannot|can not|unable|not able|não posso|não posso|não consigo|não consigo)\b.{0,140}"
     r"\b(?:translate|traduzir|lyrics?|letras?|copyright|direitos autorais|request|pedido|policy|politica|política)\b|"
-    r"\b(?:can't|cannot|can not|unable to|not able to|nao posso|não posso|nao consigo|não consigo)\b.{0,140}"
+    r"\b(?:can't|cannot|can not|unable to|not able to|não posso|não posso|não consigo|não consigo)\b.{0,140}"
     r"\b(?:translate|traduzir|lyrics?|letras?|copyright|direitos autorais|request|pedido)\b|"
     r"\b(?:violates?|viola)\b.{0,140}\b(?:copyright|direitos autorais|policy|politica|política)\b"
     r")",
@@ -165,7 +165,7 @@ MUSICAL_VOCABLES = {
     "doo",
     "flash",
     "guli",
-    "ha",
+    "há",
     "hey",
     "hi",
     "kie",
@@ -222,7 +222,7 @@ COMMON_CAPITALIZED_WORDS = {
     "Or",
     "Our",
     "She",
-    "So",
+    "Só",
     "The",
     "Then",
     "This",
@@ -425,8 +425,8 @@ class JobStopped(Exception):
 class ContractError(Exception):
     """Resposta fora do contrato.
 
-    `soft=True` marca falhas que vem de heuristica de qualidade (ex.: "parece nao
-    traduzido"), nao de quebra estrutural. Heuristica pode errar; por isso um erro
+    `soft=True` marca falhas que vem de heurística de qualidade (ex.: "parece não
+    traduzido"), não de quebra estrutural. Heurística pode errar; por isso um erro
     soft nunca pode travar o lote para sempre. Ver `SoftContractError`.
     """
 
@@ -437,7 +437,7 @@ class ContractError(Exception):
 
 
 class SoftContractError(ContractError):
-    """Falha apenas heuristica: o payload e estruturalmente valido e utilizavel."""
+    """Falha apenas heurística: o payload e estruturalmente valido e utilizavel."""
 
     def __init__(self, message: str, *, cue_ids: list[int] | None = None, payload: dict[str, str] | None = None):
         super().__init__(message, soft=True, cue_ids=cue_ids)
@@ -595,7 +595,7 @@ def normalize_subtitle_text(text: str) -> str:
 def parse_time_ms(value: str) -> int:
     m = re.match(r"^\s*(\d{1,2}):(\d{2}):(\d{2}),(\d{3})", value)
     if not m:
-        raise ValueError(f"Timecode invalido: {value}")
+        raise ValueError(f"Timecode inválido: {value}")
     hh, mm, ss, ms = map(int, m.groups())
     return ((hh * 60 + mm) * 60 + ss) * 1000 + ms
 
@@ -668,7 +668,7 @@ def smart_break_plain(text: str, max_line_length: int) -> str:
                 candidates.append((score, idx2))
     if not candidates:
         return text
-    # Pontuacao ganha peso no score, mas nao pode ganhar de caber na linha: sem este
+    # Pontuacao ganha peso no score, mas não pode ganhar de caber na linha: sem este
     # filtro o corte "natural" era escolhido mesmo deixando um lado estourado.
     viaveis = [
         (score, idx)
@@ -698,13 +698,13 @@ def apply_subtitle_formatting(text: str, max_line_length: int, max_lines: int) -
         if max(novas) <= max_line_length:
             return True
         # Corrigir excesso de linhas vale uma folga pequena no comprimento: legenda de
-        # 3 linhas cobre a imagem, enquanto 1 ou 2 caracteres a mais nao incomodam.
+        # 3 linhas cobre a imagem, enquanto 1 ou 2 caracteres a mais não incomodam.
         if len(lines) > max_lines:
             return max(novas) <= max_line_length * 1.1
         return max(novas) < max(lengths)
 
     # Legenda de dois falantes usa hifen por linha. Juntar as linhas colaria as falas
-    # de duas pessoas numa so, entao esse caso fica intocado de proposito.
+    # de duas pessoas numa só, entao esse caso fica intocado de proposito.
     if any(line.lstrip().startswith("-") for line in lines):
         return text
 
@@ -713,7 +713,7 @@ def apply_subtitle_formatting(text: str, max_line_length: int, max_lines: int) -
         candidate = smart_break_plain(unida, max_line_length)
         return candidate if melhor(candidate) else text
 
-    # Um unico par de tags envolvendo o texto todo pode ser refluido por dentro.
+    # Um único par de tags envolvendo o texto todo pode ser refluido por dentro.
     wrapper = re.match(r"^(<([ibu])>)(.*)(</\2>)$", text, flags=re.IGNORECASE | re.DOTALL)
     if wrapper and "<" not in wrapper.group(3) and ">" not in wrapper.group(3):
         miolo = " ".join(part.strip() for part in wrapper.group(3).split("\n") if part.strip())
@@ -737,7 +737,7 @@ def cue_quality_issues(
     status = (record or {}).get("status")
     text = normalize_subtitle_text(str((record or {}).get("text", "")))
     if status in {None, "", "pending"}:
-        issues.append({"severity": "pending", "code": "pending", "message": "Traducao ainda pendente."})
+        issues.append({"severity": "pending", "code": "pending", "message": "Tradução ainda pendente."})
         if not text:
             return issues
     elif status != "ok":
@@ -745,14 +745,14 @@ def cue_quality_issues(
         if not text:
             return issues
     if not text:
-        return [{"severity": "error", "code": "empty", "message": "Traducao vazia."}]
+        return [{"severity": "error", "code": "empty", "message": "Tradução vazia."}]
     if "TRADUCAO_PENDENTE" in text or "ERRO_TRADUCAO" in text:
-        issues.append({"severity": "error", "code": "marker_in_text", "message": "Marcador tecnico apareceu no texto."})
+        issues.append({"severity": "error", "code": "marker_in_text", "message": "Marcador técnico apareceu no texto."})
     if text_has_refusal(text):
         issues.append({"severity": "error", "code": "refusal", "message": "Texto parece recusa do modelo."})
     if looks_untranslated(cue.text, text):
-        # Se modelos independentes ja devolveram este mesmo texto, a heuristica perde a
-        # ultima palavra: vira aviso para revisao, nao erro que bloqueia o .OK.srt.
+        # Se modelos independentes já devolveram este mesmo texto, a heurística perde a
+        # última palavra: vira aviso para revisão, não erro que bloqueia o .OK.srt.
         if (record or {}).get("review_flag") == "consenso_heuristica":
             issues.append(
                 {
@@ -763,7 +763,7 @@ def cue_quality_issues(
                 }
             )
         else:
-            issues.append({"severity": "error", "code": "looks_untranslated", "message": "Texto parece nao traduzido."})
+            issues.append({"severity": "error", "code": "looks_untranslated", "message": "Texto parece não traduzido."})
     missing_tokens = [token for token in protected_tokens if token not in text]
     if missing_tokens:
         issues.append({"severity": "error", "code": "protected_token_missing", "message": "Token protegido ausente.", "tokens": missing_tokens})
@@ -771,13 +771,13 @@ def cue_quality_issues(
         issues.append({"severity": "error", "code": "unbalanced_tags", "message": "Tags HTML simples desbalanceadas.", "tags": unbalanced_tags(text)})
     missing_tags = missing_source_tags(cue.text, text)
     if missing_tags:
-        issues.append({"severity": "error", "code": "source_tag_missing", "message": "Tag presente na fonte sumiu na traducao.", "tags": missing_tags})
+        issues.append({"severity": "error", "code": "source_tag_missing", "message": "Tag presente na fonte sumiu na tradução.", "tags": missing_tags})
     source_notes = cue.text.count("♪")
     translated_notes = text.count("♪")
     if source_notes and not translated_notes:
         issues.append({"severity": "error", "code": "music_marker_missing", "message": "Legenda musical perdeu o marcador musical."})
     elif source_notes >= 2 and translated_notes < 2:
-        issues.append({"severity": "warning", "code": "music_marker_partial", "message": "Legenda musical deveria manter notas no inicio e no fim."})
+        issues.append({"severity": "warning", "code": "music_marker_partial", "message": "Legenda musical deveria manter notas no início e no fim."})
     lengths = line_lengths(text)
     if len(lengths) > max_lines:
         issues.append({"severity": "warning", "code": "too_many_lines", "message": f"{len(lengths)} linhas; alvo: {max_lines}.", "line_count": len(lengths)})
@@ -789,9 +789,9 @@ def cue_quality_issues(
         cps = len(visible_text(text)) / duration
         source_cps = len(visible_text(cue.text)) / duration
         if cps > max_cps:
-            # Muitas legendas comerciais ja passam do limite na propria fonte. Cobrar o
+            # Muitas legendas comerciais já passam do limite na própria fonte. Cobrar o
             # limite absoluto marcaria metade do filme e esconderia o que importa: se a
-            # traducao ficou mais lenta de ler do que o original.
+            # tradução ficou mais lenta de ler do que o original.
             if cps > source_cps * CPS_REGRESSION_RATIO:
                 issues.append(
                     {
@@ -807,13 +807,13 @@ def cue_quality_issues(
                     {
                         "severity": "info",
                         "code": "high_cps_inherited",
-                        "message": f"Acima de {max_cps:.1f} cps, mas a legenda original ja era assim.",
+                        "message": f"Acima de {max_cps:.1f} cps, mas a legenda original já era assim.",
                         "cps": round(cps, 2),
                         "source_cps": round(source_cps, 2),
                     }
                 )
     except Exception as exc:
-        issues.append({"severity": "warning", "code": "duration_parse", "message": f"Nao consegui calcular CPS: {exc}"})
+        issues.append({"severity": "warning", "code": "duration_parse", "message": f"Não consegui calcular CPS: {exc}"})
     return issues
 
 
@@ -948,7 +948,7 @@ def repair_json_text_values(raw: str) -> str:
 
     Legenda cita fala o tempo todo, e de vez em quando o modelo devolve a aspa
     interna sem escapar, o que quebra o JSON inteiro por causa de um caractere.
-    Percorre cada valor ate o fechamento real (aspa seguida de , ou }) e escapa
+    Percorre cada valor até o fechamento real (aspa seguida de , ou }) e escapa
     o que estiver no meio.
     """
     out = []
@@ -969,7 +969,7 @@ def repair_json_text_values(raw: str) -> str:
                 j += 2
                 continue
             if ch == '"':
-                # Uma aspa so fecha o valor se o que vem depois so pode ser estrutura:
+                # Uma aspa só fecha o valor se o que vem depois só pode ser estrutura:
                 # fim do objeto seguido de , ou ], ou virgula seguida de outra chave.
                 # Sem esse rigor, texto como "supostos", Yancy? seria lido como fim.
                 if FIM_DE_VALOR_JSON.match(raw, j + 1):
@@ -990,8 +990,8 @@ def repair_json_text_values(raw: str) -> str:
 
 def json_error_context(raw: str, exc: json.JSONDecodeError, span: int = 90) -> str:
     pos = getattr(exc, "pos", 0) or 0
-    inicio = max(0, pos - span)
-    return f"...{raw[inicio:pos]}>>>AQUI>>>{raw[pos : pos + span]}..."
+    início = max(0, pos - span)
+    return f"...{raw[início:pos]}>>>AQUI>>>{raw[pos : pos + span]}..."
 
 
 def extract_json_object(text: str) -> Any:
@@ -1008,29 +1008,29 @@ def extract_json_object(text: str) -> Any:
             return json.loads(recorte)
         except json.JSONDecodeError as erro:
             # Antes de queimar uma chamada nova, tenta consertar o caso comum de
-            # aspa nao escapada. So aceita se o resultado virar JSON valido.
+            # aspa não escapada. Só aceita se o resultado virar JSON valido.
             try:
                 return json.loads(repair_json_text_values(recorte))
             except json.JSONDecodeError:
                 pass
             raise ContractError(
-                f"JSON invalido: {erro.msg} na posicao {erro.pos}. Trecho: {json_error_context(recorte, erro)}"
+                f"JSON inválido: {erro.msg} na posicao {erro.pos}. Trecho: {json_error_context(recorte, erro)}"
             ) from primeiro_erro
 
 
 def validate_context_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
-        raise ContractError("Contexto nao e objeto JSON.")
+        raise ContractError("Contexto não e objeto JSON.")
     required = ["title_guess", "source_language", "tone", "style_guide_ptbr", "names_and_terms", "continuity_notes"]
     missing = [key for key in required if key not in payload]
     if missing:
         raise ContractError(f"Contexto sem campos obrigatorios: {missing}.")
     if not isinstance(payload.get("style_guide_ptbr"), list) or not payload["style_guide_ptbr"]:
-        raise ContractError("Contexto sem style_guide_ptbr util.")
+        raise ContractError("Contexto sem style_guide_ptbr útil.")
     if not isinstance(payload.get("names_and_terms"), list):
-        raise ContractError("Contexto names_and_terms invalido.")
+        raise ContractError("Contexto names_and_terms inválido.")
     if not isinstance(payload.get("continuity_notes"), list):
-        raise ContractError("Contexto continuity_notes invalido.")
+        raise ContractError("Contexto continuity_notes inválido.")
     return payload
 
 
@@ -1180,30 +1180,30 @@ def validate_translation_payload(
     protected_tokens_by_id: dict[int, list[str]] | None = None,
 ) -> dict[str, str]:
     if not isinstance(payload, dict):
-        raise ContractError("Resposta nao e um objeto JSON.")
+        raise ContractError("Resposta não e um objeto JSON.")
     translations = payload.get("translations")
     if not isinstance(translations, list):
-        raise ContractError("Campo 'translations' ausente ou invalido.")
+        raise ContractError("Campo 'translations' ausente ou inválido.")
     expected_ids = {cue.id for cue in batch.cues}
     got: dict[int, str] = {}
     for item in translations:
         if not isinstance(item, dict):
-            raise ContractError("Item de traducao nao e objeto.")
+            raise ContractError("Item de tradução não e objeto.")
         if "id" not in item or "text" not in item:
             raise ContractError("Item sem id/text.")
         try:
             cue_id = int(item["id"])
         except Exception as exc:
-            raise ContractError(f"ID invalido em item: {item!r}") from exc
+            raise ContractError(f"ID inválido em item: {item!r}") from exc
         if cue_id not in expected_ids:
             raise ContractError(f"ID inesperado: {cue_id}.")
         text = normalize_subtitle_text(str(item["text"]))
         if not text:
-            raise ContractError(f"Traducao vazia para id {cue_id}.")
+            raise ContractError(f"Tradução vazia para id {cue_id}.")
         if TIME_RE.match(text.split("\n", 1)[0] or ""):
-            raise ContractError(f"Traducao contem linha de timestamp no id {cue_id}.")
+            raise ContractError(f"Tradução contem linha de timestamp no id {cue_id}.")
         if text_has_refusal(text):
-            raise ContractError(f"Traducao parece recusa no id {cue_id}.")
+            raise ContractError(f"Tradução parece recusa no id {cue_id}.")
         source = next(cue.text for cue in batch.cues if cue.id == cue_id)
         if unbalanced_tags(text):
             raise ContractError(f"Tags desbalanceadas no id {cue_id}: {unbalanced_tags(text)}.")
@@ -1223,7 +1223,7 @@ def validate_translation_payload(
         if missing_tokens:
             raise ContractError(f"Tokens protegidos ausentes no id {cue_id}: {missing_tokens}.")
     normalized = {str(k): v for k, v in got.items()}
-    # Checagem heuristica por ultimo: o payload ja esta estruturalmente correto aqui,
+    # Checagem heurística por último: o payload já esta estruturalmente correto aqui,
     # entao a falha vira soft e carrega o payload para permitir aceitacao por consenso.
     cue_by_id = {cue.id: cue for cue in batch.cues}
     suspicious = [
@@ -1233,7 +1233,7 @@ def validate_translation_payload(
     ]
     if suspicious:
         raise SoftContractError(
-            f"Possivel texto nao traduzido nos IDs: {sorted(suspicious)[:12]}.",
+            f"Possível texto não traduzido nos IDs: {sorted(suspicious)[:12]}.",
             cue_ids=sorted(suspicious),
             payload=normalized,
         )
@@ -1292,20 +1292,20 @@ class BedrockClient:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise BedrockCallError(f"Timeout apos {self.timeout}s chamando {model_id}.") from exc
+            raise BedrockCallError(f"Timeout após {self.timeout}s chamando {model_id}.") from exc
         except FileNotFoundError as exc:
-            raise BedrockCallError("AWS CLI nao encontrado no PATH.", retryable=False) from exc
+            raise BedrockCallError("AWS CLI não encontrado no PATH.", retryable=False) from exc
 
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "").strip()
             unavailable = is_unavailable_model_error(err)
             retryable = not unavailable and is_retryable_cli_error(err)
-            raise BedrockCallError(err[:4000] or f"AWS CLI saiu com codigo {proc.returncode}.", retryable=retryable, unavailable_model=unavailable)
+            raise BedrockCallError(err[:4000] or f"AWS CLI saiu com código {proc.returncode}.", retryable=retryable, unavailable_model=unavailable)
 
         try:
             data = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
-            raise BedrockCallError(f"Resposta da AWS nao era JSON: {proc.stdout[:1000]}", retryable=True) from exc
+            raise BedrockCallError(f"Resposta da AWS não era JSON: {proc.stdout[:1000]}", retryable=True) from exc
 
         content = data.get("output", {}).get("message", {}).get("content", [])
         chunks = []
@@ -1324,7 +1324,7 @@ class BedrockClient:
 
 
 def make_llm_client(profile: str, region: str, timeout: int, logger: JsonLogger) -> Any:
-    """Ponto unico de troca de provedor de LLM.
+    """Ponto único de troca de provedor de LLM.
 
     Para usar uma chave de API em vez do Bedrock, devolva aqui uma classe com o
     mesmo `converse(model_id, system_text, user_text, *, max_tokens, temperature)`
@@ -1406,7 +1406,7 @@ class TranslatorJob:
     def request_stop(self) -> None:
         self._stop_event.set()
         self.stop_path.write_text("stop requested " + utc_now(), encoding="utf-8")
-        self.logger.event("WARN", "Parada solicitada pelo usuario.")
+        self.logger.event("WARN", "Parada solicitada pelo usuário.")
 
     def stopped(self) -> bool:
         return self._stop_event.is_set() or self.stop_path.exists()
@@ -1540,7 +1540,7 @@ class TranslatorJob:
         """Remove a saida parcial e a variante final antiga deste mesmo job.
 
         Sem isso a pasta do filme acumula .EM_ANDAMENTO.srt, .INCOMPLETO.srt e
-        .OK.srt lado a lado e nao da para saber qual e a legenda boa.
+        .OK.srt lado a lado e não da para saber qual e a legenda boa.
         """
         candidates = [
             Path(state[key])
@@ -1551,12 +1551,12 @@ class TranslatorJob:
             if path == keep or not path.exists():
                 continue
             sidecar = path.with_name(path.name + ".translator-state.json")
-            # So apaga o que este job escreveu: o sidecar tem que apontar para este job_id.
+            # Só apaga o que este job escreveu: o sidecar tem que apontar para este job_id.
             owner = load_json(sidecar, {}).get("job_id") if sidecar.exists() else None
             if owner != self.job_id:
                 self.logger.event(
                     "WARN",
-                    "Arquivo antigo com nome de saida nao pertence a este trabalho; mantendo.",
+                    "Arquivo antigo com nome de saida não pertence a este trabalho; mantendo.",
                     error=str(path),
                 )
                 continue
@@ -1564,8 +1564,8 @@ class TranslatorJob:
                 try:
                     target.unlink()
                 except OSError as exc:
-                    self.logger.event("WARN", "Nao consegui remover saida antiga.", error=f"{target}: {exc}")
-            self.logger.event("INFO", "Saida antiga removida para nao confundir com a legenda final.", error=str(path))
+                    self.logger.event("WARN", "Não consegui remover saida antiga.", error=f"{target}: {exc}")
+            self.logger.event("INFO", "Saida antiga removida para não confundir com a legenda final.", error=str(path))
 
     def try_write_output(self, state: dict[str, Any], final: bool = False) -> Path | None:
         try:
@@ -1661,7 +1661,7 @@ class TranslatorJob:
             return state
         except JobStopped:
             state["status"] = "stopped"
-            state["last_error"] = "Parado pelo usuario."
+            state["last_error"] = "Parado pelo usuário."
             self.try_write_output(state, final=False)
             self.save_state(state)
             self.logger.event("WARN", "Trabalho parado; pode ser retomado depois.", status="stopped")
@@ -1682,24 +1682,24 @@ class TranslatorJob:
                 state["context"] = context
                 self.save_state(state)
                 return
-            self.logger.event("WARN", "Contexto existente nao passou na validacao; vou recria-lo.", error="contexto ausente, generico ou truncado")
+            self.logger.event("WARN", "Contexto existente não passou na validação; vou recria-lo.", error="contexto ausente, genérico ou truncado")
         assert self.doc is not None
         self.logger.event("INFO", "Criando contexto do filme a partir do nome e de amostras da legenda.")
         system = (
-            "Voce prepara guias de traducao audiovisual para portugues brasileiro. "
-            "Use apenas os dados fornecidos. Se algo nao estiver claro, marque como inferencia ou desconhecido. "
+            "Você prepara guias de tradução audiovisual para português brasileiro. "
+            "Use apenas os dados fornecidos. Se algo não estiver claro, marque como inferencia ou desconhecido. "
             "Retorne somente JSON valido, curto, sem markdown, sem texto antes ou depois."
         )
         samples = collect_samples(self.doc.cues)
         prompt = {
-            "task": "Prepare um guia curto e pratico para traduzir esta legenda SRT para portugues brasileiro natural e contextualizado.",
+            "task": "Prepare um guia curto e prático para traduzir esta legenda SRT para português brasileiro natural e contextualizado.",
             "movie_metadata_from_path": infer_movie_title(self.source_path),
             "rules": [
-                "Nao invente sinopse externa.",
+                "Não invente sinopse externa.",
                 "Identifique nomes recorrentes, relacoes aparentes, tom, registro e escolhas de tratamento apenas quando a amostra permitir.",
-                "Inclua no maximo 8 orientacoes praticas para musicas legendadas, palavroes, humor, ironia e continuidade.",
+                "Inclua no máximo 8 orientacoes praticas para músicas legendadas, palavroes, humor, ironia e continuidade.",
                 "Use strings curtas. Limite names_and_terms a 20 itens e continuity_notes a 10 itens.",
-                "Se houver duvida, prefira diretrizes conservadoras.",
+                "Se houver dúvida, prefira diretrizes conservadoras.",
             ],
             "response_format_required": (
                 '{"title_guess":"...","year_guess":"...","source_language":"...",'
@@ -1730,15 +1730,15 @@ class TranslatorJob:
                 "source_language": "unknown",
                 "tone": "unknown",
                 "style_guide_ptbr": [
-                    "Traduzir para portugues brasileiro natural.",
-                    "Preservar nomes proprios e continuidade entre lotes.",
-                    "Adaptar musicas legendadas como legenda audiovisual, mantendo notas musicais quando existirem.",
+                    "Traduzir para português brasileiro natural.",
+                    "Preservar nomes próprios e continuidade entre lotes.",
+                    "Adaptar músicas legendadas como legenda audiovisual, mantendo notas musicais quando existirem.",
                 ],
                 "names_and_terms": [],
                 "continuity_notes": [f"Context pass falhou: {exc}"],
                 "_fallback": True,
             }
-            self.logger.event("WARN", "Nao consegui criar contexto via LLM; usando guia generico.", error=str(exc)[:500])
+            self.logger.event("WARN", "Não consegui criar contexto via LLM; usando guia genérico.", error=str(exc)[:500])
         atomic_write_json(self.context_path, context)
         state["context"] = context
         self.add_usage(state, meta if "meta" in locals() else {})
@@ -1748,7 +1748,7 @@ class TranslatorJob:
     def translate_all(self, client: BedrockClient, state: dict[str, Any], *, polish: bool) -> None:
         assert self.doc is not None
         completed = set(state.get("completed_batches", []))
-        stage_name = "polimento" if polish else "traducao"
+        stage_name = "polimento" if polish else "tradução"
         for batch in self.batches:
             if self.stopped():
                 raise JobStopped()
@@ -1793,8 +1793,8 @@ class TranslatorJob:
                         "updated_at": now,
                     }
                     if cue_id in soft_ids:
-                        # Aceito por consenso entre modelos: nao e erro duro, mas fica
-                        # sinalizado para o relatorio de QC e para revisao humana.
+                        # Aceito por consenso entre modelos: não e erro duro, mas fica
+                        # sinalizado para o relatório de QC e para revisão humana.
                         record["review_flag"] = "consenso_heuristica"
                         record["review_reason"] = str(outcome.get("reason", ""))[:400]
                         record["review_models"] = outcome.get("models_agreeing") or []
@@ -1811,7 +1811,7 @@ class TranslatorJob:
                 self.save_state(state)
                 self.logger.event(
                     "INFO",
-                    "Traducoes do lote persistidas; atualizando SRT parcial.",
+                    "Traduções do lote persistidas; atualizando SRT parcial.",
                     batch=batch.number,
                     done=self.count_done(),
                     total=len(self.doc.cues),
@@ -1819,7 +1819,7 @@ class TranslatorJob:
                 self.write_output(state, final=False)
                 self.logger.event(
                     "INFO",
-                    f"Lote {batch.number}/{len(self.batches)} concluido.",
+                    f"Lote {batch.number}/{len(self.batches)} concluído.",
                     batch=batch.number,
                     model=model,
                     done=self.count_done(),
@@ -1889,7 +1889,7 @@ class TranslatorJob:
                 }
             self.save_translations()
             self.write_quality_report(state)
-            self.logger.event("ERROR", "Alguns cues continuaram com erro de QC apos as rodadas de reparo.", error=f"ids={remaining[:30]}")
+            self.logger.event("ERROR", "Alguns cues continuaram com erro de QC após as rodadas de reparo.", error=f"ids={remaining[:30]}")
 
     def batch_done(self, batch: Batch) -> bool:
         return all(self.translations.get(str(cue.id), {}).get("status") == "ok" for cue in batch.cues)
@@ -2009,7 +2009,7 @@ class TranslatorJob:
                         if validator is not None:
                             validator(raw)
                         elif text_has_refusal(raw):
-                            raise ContractError("Resposta parece recusa, nao traducao no contrato.")
+                            raise ContractError("Resposta parece recusa, não tradução no contrato.")
                         self.logger.event("INFO", "Resposta validada.", batch=batch, model=model, attempt=attempt)
                         return raw, meta, model, outcome
                     except BedrockCallError as exc:
@@ -2021,7 +2021,7 @@ class TranslatorJob:
                         self.save_state(state)
                         if exc.unavailable_model:
                             self.unavailable_models.add(model)
-                            self.logger.event("WARN", "Modelo indisponivel para esta conta ou forma de chamada; tentando outro.", model=model, error=last_error[:700])
+                            self.logger.event("WARN", "Modelo indisponível para esta conta ou forma de chamada; tentando outro.", model=model, error=last_error[:700])
                             break
                         self.logger.event("WARN", "Erro chamando modelo.", batch=batch, model=model, attempt=attempt, error=last_error[:700])
                         if not exc.retryable:
@@ -2043,11 +2043,11 @@ class TranslatorJob:
                                 }
                             )
                             feedback = (
-                                f"A resposta anterior foi recusada pela validacao automatica: {last_error} "
-                                "Traduza ou adapte esses IDs para portugues brasileiro de verdade. "
+                                f"A resposta anterior foi recusada pela validação automática: {last_error} "
+                                "Traduza ou adapte esses IDs para português brasileiro de verdade. "
                                 "Se e somente se o texto for vocalizacao musical sem sentido lexical "
-                                "(refrao de silabas, onomatopeia, scat), repita exatamente o mesmo texto: "
-                                "isso e aceito e nao e considerado erro."
+                                "(refrao de sílabas, onomatopeia, scat), repita exatamente o mesmo texto: "
+                                "isso e aceito e não e considerado erro."
                             )
                         else:
                             hard_failures += 1
@@ -2055,7 +2055,7 @@ class TranslatorJob:
                             feedback = f"A resposta anterior foi recusada: {last_error} Corrija e devolva o contrato JSON exato."
                         self.logger.event(
                             "WARN",
-                            "Resposta fora do contrato; vou retentar." if not is_soft else "Heuristica de qualidade recusou a resposta; vou retentar com feedback.",
+                            "Resposta fora do contrato; vou retentar." if not is_soft else "Heurística de qualidade recusou a resposta; vou retentar com feedback.",
                             batch=batch,
                             model=model,
                             attempt=attempt,
@@ -2079,7 +2079,7 @@ class TranslatorJob:
                             self.logger.event(
                                 "WARN",
                                 "Modelos independentes devolveram o mesmo texto nesses IDs; aceitando por consenso "
-                                "e marcando para revisao em vez de travar o lote.",
+                                "e marcando para revisão em vez de travar o lote.",
                                 batch=batch,
                                 cue_ids=list(accepted["cue_ids"])[:20],
                                 models=models_agreeing,
@@ -2090,8 +2090,8 @@ class TranslatorJob:
                     sleep = sleep + random.uniform(0, min(2.0, sleep * 0.2))
                     self.sleep_or_stop(sleep)
             if cycle_soft_only and soft_records:
-                # Um ciclo inteiro de modelos so falhou na heuristica: o payload e valido,
-                # entao seguir tentando so queima tokens. Aceita e marca para revisao.
+                # Um ciclo inteiro de modelos só falhou na heurística: o payload e valido,
+                # entao seguir tentando só queima tokens. Aceita e marca para revisão.
                 accepted = soft_records[-1]
                 outcome.update(
                     {
@@ -2104,8 +2104,8 @@ class TranslatorJob:
                 )
                 self.logger.event(
                     "WARN",
-                    "Ciclo completo de modelos falhou apenas na heuristica de qualidade; "
-                    "aceitando a traducao e marcando os IDs para revisao.",
+                    "Ciclo completo de modelos falhou apenas na heurística de qualidade; "
+                    "aceitando a tradução e marcando os IDs para revisão.",
                     batch=batch,
                     cue_ids=list(accepted["cue_ids"])[:20],
                     error=accepted["reason"][:400],
@@ -2113,29 +2113,29 @@ class TranslatorJob:
                 return accepted.get("raw", ""), accepted.get("meta") or {}, accepted["model"], outcome
             if len(self.unavailable_models) >= len(self.config.models):
                 raise RuntimeError(
-                    "Todos os modelos configurados ficaram indisponiveis para esta conta/regiao. "
+                    "Todos os modelos configurados ficaram indisponiveis para esta conta/região. "
                     "Verifique acesso no console do Amazon Bedrock em Model access, ou troque a lista de modelos."
                 )
             if max_cycles is not None and cycle >= max_cycles:
-                raise RuntimeError(f"Falha apos {cycle} ciclo(s) de modelos. Ultimo erro: {last_error}")
+                raise RuntimeError(f"Falha após {cycle} ciclo(s) de modelos. Último erro: {last_error}")
             if self.config.retry_forever:
                 sleep = min(self.config.max_backoff, self.config.base_backoff * (2 ** min(cycle, 6)))
                 self.logger.event(
                     "WARN",
-                    "Todos os modelos falharam neste ciclo; retomando a fila apos backoff.",
+                    "Todos os modelos falharam neste ciclo; retomando a fila após backoff.",
                     batch=batch,
                     sleep=round(sleep, 1),
                 )
                 self.sleep_or_stop(sleep)
                 continue
-            raise RuntimeError(f"Falha apos tentar todos os modelos. Ultimo erro: {last_error}")
+            raise RuntimeError(f"Falha após tentar todos os modelos. Último erro: {last_error}")
 
     @staticmethod
     def soft_consensus_record(soft_records: list[dict[str, Any]]) -> dict[str, Any] | None:
         """Aceita quando modelos independentes concordam no mesmo texto suspeito.
 
         Se dois provedores diferentes devolvem exatamente os mesmos IDs marcados pela
-        heuristica, a evidencia aponta para a heuristica errada, nao para o modelo.
+        heurística, a evidencia aponta para a heurística errada, não para o modelo.
         """
         by_ids: dict[tuple, set[str]] = {}
         for rec in soft_records:
@@ -2216,13 +2216,13 @@ def build_translation_prompt(job: TranslatorJob, batch: Batch, *, feedback: str 
     prev_items, next_items = adjacent_batches(job, batch)
     protected = protected_tokens_for_batch(job, batch)
     system = (
-        "Voce e um tradutor/adaptador senior de legendas audiovisuais para portugues brasileiro. "
-        "A tarefa e traduzir trechos de um arquivo SRT fornecido pelo usuario. "
-        "Traduza de forma contextual, idiomatica e natural para publico brasileiro, sem literalismo duro. "
-        "Preserve sentido, subtexto, humor, ironia, intensidade de palavroes, nomes proprios, tags como <i> e quebras de linha quando ajudarem a leitura. "
-        "Preserve erros deliberados, nomes escritos errado, mal-entendidos e autocorrecoes quando eles sustentarem uma piada ou informacao posterior. "
-        "Quando houver musica legendada, trate como legenda audiovisual: adapte o sentido para pt-BR, mantenha simbolos musicais como ♪, e nao devolva o texto original sem traduzir. "
-        "Nao inclua timestamps, comentarios, markdown ou explicacoes. "
+        "Você e um tradutor/adaptador senior de legendas audiovisuais para português brasileiro. "
+        "A tarefa e traduzir trechos de um arquivo SRT fornecido pelo usuário. "
+        "Traduza de forma contextual, idiomatica e natural para público brasileiro, sem literalismo duro. "
+        "Preserve sentido, subtexto, humor, ironia, intensidade de palavroes, nomes próprios, tags como <i> e quebras de linha quando ajudarem a leitura. "
+        "Preserve erros deliberados, nomes escritos errado, mal-entendidos e autocorrecoes quando eles sustentarem uma piada ou informação posterior. "
+        "Quando houver música legendada, trate como legenda audiovisual: adapte o sentido para pt-BR, mantenha simbolos musicais como ♪, e não devolva o texto original sem traduzir. "
+        "Não inclua timestamps, comentarios, markdown ou explicacoes. "
         "A resposta deve comecar com {\"translations\": e terminar com }. "
         "Retorne somente JSON valido no contrato pedido."
     )
@@ -2230,19 +2230,19 @@ def build_translation_prompt(job: TranslatorJob, batch: Batch, *, feedback: str 
         "response_format_required": 'Retorne exatamente: {"translations":[{"id":1,"text":"texto em pt-BR"}]}. A chave de topo deve ser translations.',
         "movie_context": context,
         "batching_instructions": [
-            "CONTEXTO_ANTERIOR pode trazer source e ptbr ja traduzido; use para manter continuidade.",
-            "LOTE_ATUAL e o unico bloco que deve ser traduzido e retornado.",
+            "CONTEXTO_ANTERIOR pode trazer source e ptbr já traduzido; use para manter continuidade.",
+            "LOTE_ATUAL e o único bloco que deve ser traduzido e retornado.",
             "CONTEXTO_SEGUINTE existe apenas para desambiguar o LOTE_ATUAL.",
             "Retorne exatamente um item por id do LOTE_ATUAL, sem IDs extras e sem omitir nenhum.",
-            f"Use no maximo {job.config.max_lines} linhas por cue sempre que possivel.",
-            f"Procure manter cada linha com ate {job.config.max_line_length} caracteres visiveis.",
-            f"Procure manter velocidade de leitura confortavel, alvo ate {job.config.max_cps:.1f} caracteres por segundo.",
+            f"Use no máximo {job.config.max_lines} linhas por cue sempre que possível.",
+            f"Procure manter cada linha com até {job.config.max_line_length} caracteres visiveis.",
+            f"Procure manter velocidade de leitura confortavel, alvo até {job.config.max_cps:.1f} caracteres por segundo.",
             "Se a fala tiver duas pessoas com hifen, preserve essa estrutura quando natural.",
             "Para SDH/som entre colchetes, traduza o conteudo do colchete para pt-BR quando for descritivo: [laughs] -> [ri].",
             "Se houver idioma em colchetes, use forma natural em pt-BR: [speaks French] -> [fala frances].",
             "Se houver tags HTML simples, preserve as tags ao redor do texto equivalente.",
             "Tokens listados em protected_tokens_by_id devem ser copiados exatamente; eles podem ser nomes, grafias intencionais ou piadas.",
-            "Nao resuma, nao censure, nao explique.",
+            "Não resuma, não censure, não explique.",
         ],
         "protected_tokens_by_id": protected,
         "previous_context_source_and_ptbr": prev_items,
@@ -2270,9 +2270,9 @@ def build_polish_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "")
             }
         )
     system = (
-        "Voce e revisor senior de legendas em portugues brasileiro. "
+        "Você e revisor senior de legendas em português brasileiro. "
         "Revise apenas o lote atual para naturalidade, contexto, concisao de legenda e consistencia. "
-        "Preserve IDs e nao inclua comentarios. A resposta deve comecar com {\"translations\": e terminar com }. Retorne somente JSON valido."
+        "Preserve IDs e não inclua comentarios. A resposta deve comecar com {\"translations\": e terminar com }. Retorne somente JSON valido."
     )
     payload = {
         "response_format_required": 'Retorne exatamente: {"translations":[{"id":1,"text":"texto revisado em pt-BR"}]}. A chave de topo deve ser translations.',
@@ -2280,8 +2280,8 @@ def build_polish_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "")
         "rules": [
             "Melhore frases duras ou literais.",
             "Mantenha timing de legenda: frases curtas e legiveis.",
-            f"Use no maximo {job.config.max_lines} linhas por cue sempre que possivel.",
-            f"Procure manter cada linha com ate {job.config.max_line_length} caracteres visiveis e ate {job.config.max_cps:.1f} cps.",
+            f"Use no máximo {job.config.max_lines} linhas por cue sempre que possível.",
+            f"Procure manter cada linha com até {job.config.max_line_length} caracteres visiveis e até {job.config.max_cps:.1f} cps.",
             "Preserve nomes, tags, hifens de dialogo e simbolos musicais.",
             "Tokens listados em protected_tokens_by_id devem continuar exatamente iguais.",
             "Retorne exatamente os IDs do lote atual.",
@@ -2401,9 +2401,9 @@ def job_index_path(base: Path) -> Path:
 def register_job_dir(base: Path, job_dir: Path) -> None:
     """Anota o job para a UI achar mesmo quando a legenda esta fora da pasta base.
 
-    O diretorio de estado nasce ao lado do .srt de origem. Sem este indice, uma
+    O diretório de estado nasce ao lado do .srt de origem. Sem este indice, uma
     legenda escolhida pelo campo de caminho absoluto virava um trabalho que roda
-    mas nao aparece na tela: sem status, sem log e sem botao de parar.
+    mas não aparece na tela: sem status, sem log e sem botao de parar.
     """
     try:
         path = job_index_path(base)
@@ -2476,7 +2476,7 @@ def compact_state(state: dict[str, Any]) -> dict[str, Any]:
         "stale_running": stale_running,
         "source_path": state.get("source_path"),
         "output": state.get("final_output_path") or state.get("last_written_output"),
-        "last_error": state.get("last_error") or ("Processo de traducao nao esta ativo; use Retomar para continuar." if stale_running else None),
+        "last_error": state.get("last_error") or ("Processo de tradução não esta ativo; use Retomar para continuar." if stale_running else None),
         "updated_at": state.get("updated_at"),
         "total_cues": total,
         "done_cues": done if total and done <= total else done,
@@ -2502,8 +2502,8 @@ def ensure_quality_report_current(
     quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quality = quality or {}
-    # Relatorio gravado por uma versao anterior dos criterios e recalculado, senao a UI
-    # mostra numeros que nao batem com as regras atuais.
+    # Relatório gravado por uma versao anterior dos critérios e recalculado, senao a UI
+    # mostra números que não batem com as regras atuais.
     if isinstance(quality, dict) and quality.get("report_version") == QUALITY_REPORT_VERSION:
         return quality
     source = state.get("source_path")
@@ -2553,7 +2553,7 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
     if stale_running:
         state["status"] = "stalled"
         if not state.get("last_error"):
-            state["last_error"] = "Processo de traducao nao esta ativo; use Retomar para continuar."
+            state["last_error"] = "Processo de tradução não esta ativo; use Retomar para continuar."
     translations = load_json(job_dir / "translations.json", {})
     state["done_cues"] = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "ok")
     quality = load_json(job_dir / "quality_report.json", {})
@@ -2569,7 +2569,7 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
         state["pending_cues"] = max(0, int(state.get("total_cues") or 0) - int(state.get("done_cues") or 0))
         state["warning_cues"] = 0
     # translations.json e a fonte da verdade: um retry posterior limpa a flag, entao
-    # derivar daqui evita mostrar cue que ja foi corrigido.
+    # derivar daqui evita mostrar cue que já foi corrigido.
     review_ids = sorted(
         int(cue_id)
         for cue_id, rec in translations.items()
@@ -2616,10 +2616,10 @@ def load_source_doc_cached(path: Path) -> "SrtDocument | None":
 
 
 def compare_recent(state: dict[str, Any], translations: dict[str, Any], limit: int | None = 60) -> list[dict[str, Any]]:
-    """Falas ja traduzidas, com fonte e traducao lado a lado.
+    """Falas já traduzidas, com fonte e tradução lado a lado.
 
-    `limit` recorta as ultimas N para o acompanhamento ao vivo; `None` devolve o
-    filme inteiro, usado pelo endpoint sob demanda para nao inflar cada polling.
+    `limit` recorta as últimas N para o acompanhamento ao vivo; `None` devolve o
+    filme inteiro, usado pelo endpoint sob demanda para não inflar cada polling.
     """
     src = state.get("source_path")
     if not src:
@@ -2747,7 +2747,7 @@ class UIHandler(BaseHTTPRequestHandler):
                 data = self.read_json()
                 source = Path(data.get("path", "")).expanduser().resolve()
                 if not source.exists():
-                    self.send_json({"error": "Arquivo nao encontrado."}, 400)
+                    self.send_json({"error": "Arquivo não encontrado."}, 400)
                     return
                 cfg = JobConfig(
                     source_path=discover_resume_source(source),
@@ -2858,7 +2858,7 @@ def start_job_thread(job: TranslatorJob) -> None:
             try:
                 job.logger.event(
                     "ERROR",
-                    "Runner terminou com excecao nao tratada.",
+                    "Runner terminou com exceção não tratada.",
                     status="failed",
                     error=f"{exc.__class__.__name__}: {exc}"[:1000],
                 )
@@ -3012,7 +3012,7 @@ UI_HTML = r"""<!doctype html>
     .toggle-row input { width: auto; flex: none; }
     .toggle-row span { flex: 1; }
 
-    /* ---- botao de ajuda e popover ---- */
+    /* ---- botão de ajuda e popover ---- */
     .info {
       width: 16px; height: 16px;
       min-width: 16px;
@@ -3154,7 +3154,7 @@ UI_HTML = r"""<!doctype html>
     .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--blue), var(--green)); transition: width .25s ease; }
     .eta { margin: 0 16px 14px; font-size: 12px; color: var(--muted); }
 
-    /* ---- cartao de resultado ---- */
+    /* ---- cartão de resultado ---- */
     .result {
       margin: 0 16px 14px;
       border: 1px solid var(--line);
@@ -3341,7 +3341,7 @@ UI_HTML = r"""<!doctype html>
     .job strong { display: block; font-size: 12.5px; overflow-wrap: anywhere; margin-bottom: 6px; }
     .small { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
     .empty { font-size: 12.5px; color: var(--muted); padding: 6px 0; }
-    @media (max-width: 980px) {
+    @média (max-width: 980px) {
       main { grid-template-columns: 1fr; }
       .status-grid { grid-template-columns: repeat(2, 1fr); }
       .split { grid-template-columns: 1fr; }
@@ -3377,7 +3377,7 @@ UI_HTML = r"""<!doctype html>
             <input id="profile" value="__DEFAULT_PROFILE__">
           </div>
           <div>
-            <label class="field-label" for="region">Regiao <button class="info" data-help="region" aria-label="Ajuda">i</button></label>
+            <label class="field-label" for="region">Região <button class="info" data-help="region" aria-label="Ajuda">i</button></label>
             <input id="region" value="__DEFAULT_REGION__">
           </div>
         </div>
@@ -3407,7 +3407,7 @@ UI_HTML = r"""<!doctype html>
         </div>
         <div class="row">
           <div>
-            <label class="field-label" for="maxLines">Maximo de linhas <button class="info" data-help="maxLines" aria-label="Ajuda">i</button></label>
+            <label class="field-label" for="maxLines">Máximo de linhas <button class="info" data-help="maxLines" aria-label="Ajuda">i</button></label>
             <input id="maxLines" type="number" min="1" max="4" value="2">
           </div>
           <div>
@@ -3417,7 +3417,7 @@ UI_HTML = r"""<!doctype html>
         </div>
         <div class="row">
           <div>
-            <label class="field-label" for="maxCps">CPS maximo <button class="info" data-help="maxCps" aria-label="Ajuda">i</button></label>
+            <label class="field-label" for="maxCps">CPS máximo <button class="info" data-help="maxCps" aria-label="Ajuda">i</button></label>
             <input id="maxCps" type="number" min="8" max="30" step="0.5" value="17">
           </div>
           <div>
@@ -3426,11 +3426,11 @@ UI_HTML = r"""<!doctype html>
           </div>
         </div>
 
-        <label class="toggle-row"><input id="retryForever" type="checkbox" checked> <span>Retentar ate concluir ou parar manualmente</span> <button class="info" data-help="retryForever" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="retryForever" type="checkbox" checked> <span>Retentar até concluir ou parar manualmente</span> <button class="info" data-help="retryForever" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="retryQc" type="checkbox" checked> <span>Refazer automaticamente cues com erro duro de QC</span> <button class="info" data-help="retryQc" aria-label="Ajuda">i</button></label>
         <label class="toggle-row"><input id="contextPass" type="checkbox" checked> <span>Criar guia de contexto antes de traduzir</span> <button class="info" data-help="contextPass" aria-label="Ajuda">i</button></label>
-        <label class="toggle-row"><input id="polishPass" type="checkbox"> <span>Rodar passe final de revisao</span> <button class="info" data-help="polishPass" aria-label="Ajuda">i</button></label>
-        <label class="toggle-row"><input id="forceNew" type="checkbox"> <span>Criar trabalho novo mesmo se ja existir estado</span> <button class="info" data-help="forceNew" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="polishPass" type="checkbox"> <span>Rodar passe final de revisão</span> <button class="info" data-help="polishPass" aria-label="Ajuda">i</button></label>
+        <label class="toggle-row"><input id="forceNew" type="checkbox"> <span>Criar trabalho novo mesmo se já existir estado</span> <button class="info" data-help="forceNew" aria-label="Ajuda">i</button></label>
 
         <div class="actions">
           <div class="action-wrap">
@@ -3494,12 +3494,12 @@ UI_HTML = r"""<!doctype html>
       </div>
       <div class="panel-body" style="padding-top:0;">
         <div class="compare-head">
-          <span>Comparar traducao <button class="info" data-help="comparar" aria-label="Ajuda">i</button></span>
+          <span>Comparar tradução <button class="info" data-help="comparar" aria-label="Ajuda">i</button></span>
           <span class="spacer"></span>
-          <span class="mini"><select id="cmpScope"><option value="live">ultimas 60 (ao vivo)</option><option value="all">filme inteiro</option></select><button class="info" data-help="cmpScope" aria-label="Ajuda">i</button></span>
+          <span class="mini"><select id="cmpScope"><option value="live">últimas 60 (ao vivo)</option><option value="all">filme inteiro</option></select><button class="info" data-help="cmpScope" aria-label="Ajuda">i</button></span>
           <span class="mini"><input id="cmpSearch" type="search" placeholder="buscar no texto..." autocomplete="off"><button class="info" data-help="cmpSearch" aria-label="Ajuda">i</button></span>
           <span class="mini" id="wrapFollow"><label><input type="checkbox" id="cmpFollow" checked> acompanhar</label><button class="info" data-help="cmpFollow" aria-label="Ajuda">i</button></span>
-          <span class="mini" id="wrapReview"><label><input type="checkbox" id="cmpReview"> so revisar</label><button class="info" data-help="cmpReview" aria-label="Ajuda">i</button></span>
+          <span class="mini" id="wrapReview"><label><input type="checkbox" id="cmpReview"> só revisar</label><button class="info" data-help="cmpReview" aria-label="Ajuda">i</button></span>
           <span class="mini" id="cmpCount"></span>
         </div>
         <div id="compare" class="compare"></div>
@@ -3510,236 +3510,236 @@ UI_HTML = r"""<!doctype html>
     const HELP = {
       painelEntrada: {
         t: "Painel de entrada",
-        p: "E aqui que voce escolhe a legenda e ajusta como ela vai ser traduzida. O uso normal e curto: confira a legenda no primeiro campo e clique no botao azul. Todo o resto ja vem com valor bom.",
-        e: "Os campos estao em ordem de importancia: primeiro QUAL legenda, depois QUAL conta da AWS, depois QUAIS modelos, e so no fim as regras de formatacao da legenda.",
-        d: "Nao precisa mexer em nada para comecar."
+        p: "É aqui que você escolhe a legenda e ajusta como ela vai ser traduzida. O uso normal é curto: confira a legenda no primeiro campo e clique no botão azul. Todo o resto já vem com valor bom.",
+        e: "Os campos estão em ordem de importancia: primeiro QUAL legenda, depois QUAL conta da AWS, depois QUAIS modelos, é só no fim as regras de formatação da legenda.",
+        d: "Não precisa mexer em nada para comecar."
       },
       refresh: {
         t: "Atualizar",
-        p: "Faz a pagina olhar de novo para a pasta do filme e para a lista de trabalhos. E so uma releitura: nada e traduzido, iniciado ou apagado por causa deste botao.",
-        e: "Voce deixou esta pagina aberta e, no Finder, copiou a legenda de outro filme para a pasta. Ela nao vai aparecer sozinha no campo de cima, porque a lista foi montada quando a pagina abriu. Clique em Atualizar e ela aparece.",
-        d: "So quando voce mexeu nos arquivos da pasta por fora."
+        p: "Faz a página olhar de novo para a pasta do filme e para a lista de trabalhos. É só uma releitura: nada é traduzido, iniciado ou apagado por causa deste botão.",
+        e: "Você deixou esta página aberta e, no Finder, copiou a legenda de outro filme para a pasta. Ela não vai aparecer sozinha no campo de cima, porque a lista foi montada quando a página abriu. Clique em Atualizar e ela aparece.",
+        d: "Só quando você mexeu nos arquivos da pasta por fora."
       },
       file: {
         t: "Legenda encontrada",
-        p: "Lista os arquivos .srt que estao na pasta que o servidor esta olhando. E daqui que voce escolhe o que traduzir.",
-        e: "Se a pasta do filme tem <code>Filme.srt</code> e <code>Subs/Filme.en.SDH.srt</code>, o primeiro da lista sera o <code>Filme.srt</code>. A versao SDH fica embaixo de proposito: ela e feita para surdos e traz descricoes de som como <code>[porta batendo]</code>, que nem todo mundo quer na legenda.",
-        d: "Escolha aqui. So use o campo de baixo se a legenda estiver em outra pasta."
+        p: "Lista os arquivos .srt que estão na pasta que o servidor está olhando. É daqui que você escolhe o que traduzir.",
+        e: "Se a pasta do filme tem <code>Filme.srt</code> e <code>Subs/Filme.en.SDH.srt</code>, o primeiro da lista será o <code>Filme.srt</code>. A versão SDH fica embaixo de proposito: ela é feita para surdos e traz descrições de som como <code>[porta batendo]</code>, que nem todo mundo quer na legenda.",
+        d: "Escolha aqui. Só use o campo de baixo se a legenda estiver em outra pasta."
       },
       path: {
         t: "Ou caminho absoluto",
-        p: "O endereco completo de uma legenda que nao esta na pasta acima. Se voce escrever algo aqui, este campo manda e a escolha do campo de cima e ignorada.",
-        e: "Para traduzir algo que esta em Downloads, cole algo como <code>/Users/seu-usuario/Downloads/Filme.srt</code>. Atalho util: no Finder, clique no arquivo e aperte Cmd+Option+C, que copia o caminho completo pronto para colar aqui.",
+        p: "O endereco completo de uma legenda que não está na pasta acima. Se você escrever algo aqui, este campo manda e a escolha do campo de cima é ignorada.",
+        e: "Para traduzir algo que está em Downloads, cole algo como <code>/Users/seu-usuário/Downloads/Filme.srt</code>. Atalho útil: no Finder, clique no arquivo e aperte Cmd+Option+C, que copia o caminho completo pronto para colar aqui.",
         d: "Deixe vazio no uso normal."
       },
       profile: {
         t: "AWS profile",
-        p: "Diz qual conta da AWS usar. E o apelido que o AWS CLI guardou no seu computador quando voce fez login, e nao seu e-mail nem sua senha.",
-        e: "Para ver os apelidos que existem nesta maquina, rode no terminal <code>aws configure list-profiles</code>. O que esta preenchido aqui e o que ja funcionou.",
-        d: "Ja esta certo. So mude se for usar outra conta AWS."
+        p: "Diz qual conta da AWS usar. É o apelido que o AWS CLI guardou no seu computador quando você fez login, e não seu e-mail nem sua senha.",
+        e: "Para ver os apelidos que existem nesta máquina, rode no terminal <code>aws configure list-profiles</code>. O que está preenchido aqui é o que já funcionou.",
+        d: "Já está certo. Só mude se for usar outra conta AWS."
       },
       region: {
-        t: "Regiao",
-        p: "Em qual data center da AWS o pedido vai cair. Isso importa porque a lista de modelos disponiveis muda de regiao para regiao.",
-        e: "Em <code>us-east-1</code>, que fica na Virginia, os modelos Claude e Nova responderam nesta conta. Se voce trocar para <code>sa-east-1</code>, que e Sao Paulo, e bem provavel que esses modelos nem existam la e todos falhem de uma vez.",
+        t: "Região",
+        p: "Em qual data center da AWS o pedido vai cair. Isso importa porque a lista de modelos disponíveis muda de região para região.",
+        e: "Em <code>us-east-1</code>, que fica na Virginia, os modelos Claude e Nova responderam nesta conta. Se você trocar para <code>sa-east-1</code>, que é São Paulo, é bem provável que esses modelos nem existam lá e todos falhem de uma vez.",
         d: "Deixe us-east-1."
       },
       models: {
         t: "Modelos em ordem de fallback",
-        p: "A fila de modelos, um por linha. Ele sempre tenta o de cima primeiro; se aquele nao der conta, desce para o proximo. E uma escada de reserva.",
-        e: "Pense num revezamento: o Claude Sonnet e o titular, porque traduz melhor. Se ele engasgar num trecho, o Haiku entra. Se o Haiku tambem engasgar, a Nova entra. Ter mais de um modelo aqui tem um segundo efeito importante: quando dois modelos diferentes devolvem exatamente o mesmo texto, o sistema entende que quem esta errado e a suspeita dele, e aceita a traducao em vez de ficar insistindo para sempre.",
-        d: "Nao precisa mexer. Tirar modelos daqui so enfraquece a rede de seguranca."
+        p: "A fila de modelos, um por linha. Ele sempre tenta o de cima primeiro; se aquele não der conta, desce para o próximo. É uma escada de reserva.",
+        e: "Pense num revezamento: o Claude Sonnet é o titular, porque traduz melhor. Se ele engasgar num trecho, o Haiku entra. Se o Haiku também engasgar, a Nova entra. Ter mais de um modelo aqui tem um segundo efeito importante: quando dois modelos diferentes devolvem exatamente o mesmo texto, o sistema entende que quem está errado é a suspeita dele, e aceita a tradução em vez de ficar insistindo para sempre.",
+        d: "Não precisa mexer. Tirar modelos daqui só enfraquece a rede de segurança."
       },
       batchSize: {
         t: "Legendas por lote",
-        p: "A legenda nao vai inteira de uma vez: ela e traduzida em blocos. Este numero diz quantas falas vao em cada bloco. Bloco maior faz o modelo enxergar mais da cena de uma vez, o que ajuda no contexto, mas deixa a resposta longa e mais sujeita a vir cortada pela metade.",
-        e: "Com 28, o filme que voce acabou de traduzir (2435 falas) virou 87 blocos, cada um cobrindo cerca de um minuto e meio de filme. Se o log encher de linha amarela em varios blocos seguidos, baixar este numero para 20 costuma resolver.",
-        d: "Nao precisa mexer."
+        p: "A legenda não vai inteira de uma vez: ela é traduzida em blocos. Este número diz quantas falas vão em cada bloco. Bloco maior faz o modelo enxergar mais da cena de uma vez, o que ajuda no contexto, mas deixa a resposta longa e mais sujeita a vir cortada pela metade.",
+        e: "Com 28, o filme que você acabou de traduzir (2435 falas) virou 87 blocos, cada um cobrindo cerca de um minuto e meio de filme. Se o log encher de linha amarela em varios blocos seguidos, baixar este número para 20 costuma resolver.",
+        d: "Não precisa mexer."
       },
       batchChars: {
         t: "Caracteres por lote",
-        p: "Um segundo limite para o bloco, agora contando letras em vez de falas. Vale o que estourar primeiro. Serve para uma cena de falas muito longas nao gerar um bloco gigante.",
-        e: "Numa cena de conversa rapida, o bloco fecha com as 28 falas normais. Numa cena em que um personagem da um discurso, ele pode fechar com 18 falas, porque ja bateu os 4300 caracteres antes de chegar em 28.",
-        d: "Nao precisa mexer."
+        p: "Um segundo limite para o bloco, agora contando letras em vez de falas. Vale o que estourar primeiro. Serve para uma cena de falas muito longas não gerar um bloco gigante.",
+        e: "Numa cena de conversa rápida, o bloco fecha com as 28 falas normais. Numa cena em que um personagem da um discurso, ele pode fechar com 18 falas, porque já bateu os 4300 caracteres antes de chegar em 28.",
+        d: "Não precisa mexer."
       },
       attempts: {
         t: "Tentativas por modelo",
-        p: "Quantas vezes insistir com o mesmo modelo antes de chamar o proximo da fila. Nao e repeticao burra: cada nova tentativa vai com o motivo da recusa anterior escrito dentro do pedido.",
+        p: "Quantas vezes insistir com o mesmo modelo antes de chamar o próximo da fila. Não é repetição burra: cada nova tentativa vai com o motivo da recusa anterior escrito dentro do pedido.",
         e: "Com 3: o Sonnet tenta, a resposta e recusada, e na segunda tentativa ele recebe junto um recado do tipo <i>sua resposta anterior foi recusada porque as falas 12 e 13 ficaram sem traduzir</i>. Se as 3 tentativas falharem, a vez passa para o Haiku.",
-        d: "Nao precisa mexer."
+        d: "Não precisa mexer."
       },
       timeout: {
         t: "Timeout por chamada",
         p: "Quanto tempo esperar por uma resposta antes de considerar que ela se perdeu no caminho. Bloco grande e modelo lento demoram mais.",
-        e: "240 segundos, ou seja 4 minutos, e bem folgado: na pratica um bloco de 28 falas volta em 10 a 15 segundos. Se voce baixar para 60, um bloco mais pesado pode ser cortado no meio e refeito a toa.",
-        d: "Nao precisa mexer."
+        e: "240 segundos, ou seja 4 minutos, é bem folgado: na prática um bloco de 28 falas volta em 10 a 15 segundos. Se você baixar para 60, um bloco mais pesado pode ser cortado no meio e refeito a toa.",
+        d: "Não precisa mexer."
       },
       maxLines: {
-        t: "Maximo de linhas",
-        p: "Quantas linhas uma legenda pode ocupar na tela. Duas e o padrao do cinema e da TV: com tres ou mais, a legenda cobre a imagem e o olho se perde.",
-        e: "Uma fala longa fica assim, quebrada em duas:<span class='sample'>Voce sempre diz isso<br>quando algo esta errado.</span>Com 1 linha, essa mesma fala viraria uma tira unica atravessando a tela inteira.",
+        t: "Máximo de linhas",
+        p: "Quantas linhas uma legenda pode ocupar na tela. Duas é o padrão do cinema e da TV: com três ou mais, a legenda cobre a imagem e o olho se perde.",
+        e: "Uma fala longa fica assim, quebrada em duas:<span class='sample'>Você sempre diz isso<br>quando algo está errado.</span>Com 1 linha, essa mesma fala viraria uma tira única atravessando a tela inteira.",
         d: "Deixe 2."
       },
       lineLength: {
         t: "Caracteres por linha",
-        p: "O tamanho maximo de cada linha, contando so o que aparece na tela. 42 e o numero que os estudios usam em portugues: e mais ou menos o que o olho le de uma vez, sem precisar varrer a tela.",
-        e: "A fala <code>Voce sempre diz isso quando algo esta errado.</code> tem 44 caracteres e estoura o limite, entao ela e quebrada num ponto natural da frase:<span class='sample'>Voce sempre diz isso<br>quando algo esta errado.</span>",
+        p: "O tamanho máximo de cada linha, contando só o que aparece na tela. 42 é o número que os estúdios usam em português: é mais ou menos o que o olho lê de uma vez, sem precisar varrer a tela.",
+        e: "A fala <code>Você sempre diz isso quando algo está errado.</code> tem 44 caracteres e estoura o limite, então ela é quebrada num ponto natural da frase:<span class='sample'>Você sempre diz isso<br>quando algo está errado.</span>",
         d: "Deixe 42."
       },
       maxCps: {
-        t: "CPS maximo",
-        p: "Velocidade de leitura: quantas letras aparecem na tela por segundo. Acima de mais ou menos 17, a legenda some antes de voce terminar de ler. Mas aqui este numero nao e cobrado no seco: ele e sempre comparado com a legenda original.",
-        e: "Por que comparado? Porque nesta legenda em ingles, 48 por cento das falas JA passavam de 17. Cobrando o numero puro, metade do filme viraria aviso e o problema de verdade sumiria no meio do barulho. Entao a regra e: original a 25 e traducao a 26 nao gera aviso, porque o filme ja era corrido ali. Original a 15 e traducao a 30 gera aviso, porque quem deixou pesado foi a traducao.",
+        t: "CPS máximo",
+        p: "Velocidade de leitura: quantas letras aparecem na tela por segundo. Acima de mais ou menos 17, a legenda some antes de você terminar de ler. Mas aqui este número não é cobrado no seco: ele é sempre comparado com a legenda original.",
+        e: "Por que comparado? Porque nesta legenda em inglês, 48 por cento das falas JA passavam de 17. Cobrando o número puro, metade do filme viraria aviso e o problema de verdade sumiria no meio do barulho. Então a regra e: original a 25 e tradução a 26 não gera aviso, porque o filme já era corrido ali. Original a 15 e tradução a 30 gera aviso, porque quem deixou pesado foi a tradução.",
         d: "Deixe 17."
       },
       qcRounds: {
         t: "Rodadas de reparo QC",
-        p: "Terminada a traducao, ele passa um pente fino em tudo. Se achar erro grave numa fala, refaz o bloco inteiro daquela fala. Este numero e quantas vezes ele pode tentar consertar antes de desistir.",
-        e: "Uma fala voltou com o italico aberto e nao fechado, tipo <code>&lt;i&gt;Ola.</code> sem o <code>&lt;/i&gt;</code>. Isso bagunca a exibicao, entao ele refaz o bloco. Se depois de 2 rodadas continuar quebrado, ele para de gastar chamada e entrega o arquivo com INCOMPLETO no nome, avisando voce.",
+        p: "Terminada a tradução, ele passa um pente fino em tudo. Se achar erro grave numa fala, refaz o bloco inteiro daquela fala. Este número e quantas vezes ele pode tentar consertar antes de desistir.",
+        e: "Uma fala voltou com o itálico aberto e não fechado, tipo <code>&lt;i&gt;Ola.</code> sem o <code>&lt;/i&gt;</code>. Isso bagunca a exibição, então ele refaz o bloco. Se depois de 2 rodadas continuar quebrado, ele para de gastar chamada e entrega o arquivo com INCOMPLETO no nome, avisando você.",
         d: "Deixe 2."
       },
       retryForever: {
-        t: "Retentar ate concluir ou parar manualmente",
-        p: "Ligado, ele nunca desiste sozinho de um bloco: espera um pouco, tenta de novo, espera mais um pouco, tenta de novo, ate dar certo ou ate voce clicar em Parar. Desligado, um bloco que falha e abandonado e a traducao segue sem ele.",
-        e: "E a diferenca entre voltar e achar o filme inteiro traduzido, ou voltar e achar um buraco de 30 falas bem no meio da cena mais importante. Caso tipico: a AWS comeca a limitar suas chamadas porque voce usou muito. Ligado, ele espera a limitacao passar e continua sozinho.",
+        t: "Retentar até concluir ou parar manualmente",
+        p: "Ligado, ele nunca desiste sozinho de um bloco: espera um pouco, tenta de novo, espera mais um pouco, tenta de novo, até dar certo ou até você clicar em Parar. Desligado, um bloco que falha é abandonado e a tradução segue sem ele.",
+        e: "É a diferença entre voltar e achar o filme inteiro traduzido, ou voltar e achar um buraco de 30 falas bem no meio da cena mais importante. Caso tipico: a AWS comeca a limitar suas chamadas porque você usou muito. Ligado, ele espera a limitação passar e continua sozinho.",
         d: "Deixe ligado."
       },
       retryQc: {
         t: "Refazer cues com erro duro de QC",
         p: "No fim de tudo, refaz automaticamente os blocos que tiverem alguma fala reprovada no pente fino.",
-        e: "Desligue apenas se voce quiser ver o que o modelo devolveu cru, sem nenhuma correcao depois. Isso serve para comparar modelos entre si, nao para traduzir um filme de verdade.",
+        e: "Desligue apenas se você quiser ver o que o modelo devolveu cru, sem nenhuma correção depois. Isso serve para comparar modelos entre si, não para traduzir um filme de verdade.",
         d: "Deixe ligado."
       },
       contextPass: {
         t: "Criar guia de contexto antes de traduzir",
-        p: "Antes de comecar, ele le amostras do filme inteiro e escreve para si mesmo um resumo: quem sao os personagens, que tom o filme tem, como as pessoas se tratam. Esse resumo vai junto em todos os blocos.",
-        e: "E o que impede o problema classico de traducao em pedacos: o personagem tratar alguem por voce no comeco do filme e por tu no fim, ou um apelido virar uma coisa no bloco 3 e outra coisa no bloco 40. Custa uma chamada a mais, no comeco, uma vez so.",
+        p: "Antes de comecar, ele le amostras do filme inteiro e escreve para si mesmo um resumo: quem são os personagens, que tom o filme tem, como as pessoas se tratam. Esse resumo vai junto em todos os blocos.",
+        e: "É o que impede o problema classico de tradução em pedacos: o personagem tratar alguém por você no começo do filme e por tu no fim, ou um apelido virar uma coisa no bloco 3 e outra coisa no bloco 40. Custa uma chamada a mais, no começo, uma vez só.",
         d: "Deixe ligado."
       },
       polishPass: {
-        t: "Rodar passe final de revisao",
-        p: "Uma segunda passada por tudo. Na primeira ele traduz; nesta, ele rele o que ja traduziu e melhora. Praticamente dobra o tempo e o custo.",
-        e: "E o passe que pega deslize de sentido. Nesta legenda, por exemplo, <code>chat room</code> saiu como <i>grupo de e-mail</i>. Esse tipo de erro passa batido na validacao automatica, porque esta em portugues correto e bem escrito; so uma releitura pega.",
-        d: "Ligue quando a legenda for pra valer e o tempo nao importar."
+        t: "Rodar passe final de revisão",
+        p: "Uma segunda passada por tudo. Na primeira ele traduz; nesta, ele rele o que já traduziu e melhora. Praticamente dobra o tempo e o custo.",
+        e: "É o passe que pega deslize de sentido. Nesta legenda, por exemplo, <code>chat room</code> saiu como <i>grupo de e-mail</i>. Esse tipo de erro passa batido na validação automática, porque está em português correto e bem escrito; só uma releitura pega.",
+        d: "Ligue quando a legenda for pra valer e o tempo não importar."
       },
       forceNew: {
-        t: "Criar trabalho novo mesmo se ja existir estado",
+        t: "Criar trabalho novo mesmo se já existir estado",
         p: "Joga fora todo o progresso salvo daquela legenda e comeca do zero.",
-        e: "Cuidado com este: se voce ja traduziu 80 por cento e marcar aqui, esses 80 por cento sao refeitos e cobrados de novo. So faz sentido quando voce mudou algo grande, como trocar a lista de modelos, e quer o filme inteiro no criterio novo.",
+        e: "Cuidado com este: se você já traduziu 80 por cento e marcar aqui, esses 80 por cento são refeitos e cobrados de novo. Só faz sentido quando você mudou algo grande, como trocar a lista de modelos, e quer o filme inteiro no critério novo.",
         d: "Deixe desmarcado."
       },
       doctor: {
         t: "Testar Bedrock",
-        p: "Um teste rapido de porta, antes de comecar pra valer. Ele manda um pedido minimo, literalmente pedindo a palavra OK, para cada modelo da lista, usando a conta e a regiao preenchidas aqui.",
-        e: "Serve para voce nao descobrir depois de 20 minutos que a credencial estava errada. Ele responde tres perguntas: a conta funciona? a regiao responde? esta conta tem permissao neste modelo? Se algum voltar <code>AccessDeniedException</code>, e questao de permissao: entre no console da AWS, va em Amazon Bedrock, Model access, e libere o modelo. O que ele NAO faz e avaliar qualidade de traducao: ele so testa se a porta abre.",
+        p: "Um teste rápido de porta, antes de comecar pra valer. Ele manda um pedido mínimo, literalmente pedindo a palavra OK, para cada modelo da lista, usando a conta e a região preenchidas aqui.",
+        e: "Serve para você não descobrir depois de 20 minutos que a credencial estava errada. Ele responde três perguntas: a conta funciona? a região responde? esta conta tem permissão neste modelo? Se algum voltar <code>AccessDeniedException</code>, e questão de permissão: entre no console da AWS, va em Amazon Bedrock, Model access, e libere o modelo. O que ele NAO faz e avaliar qualidade de tradução: ele só testa se a porta abre.",
         d: "Vale clicar antes do primeiro filme do dia."
       },
       start: {
         t: "Iniciar ou retomar",
-        p: "O botao principal, e ele decide sozinho entre comecar e continuar: se ja existe trabalho para aquela legenda, retoma exatamente de onde parou; se nao existe, cria um novo.",
-        e: "Voce traduziu 60 por cento ontem e fechou o notebook. Hoje escolhe a mesma legenda e clica aqui: ele reconhece os blocos que ja estavam prontos e comeca do seguinte, sem retraduzir nem cobrar de novo pelo que ja estava feito. Clicar duas vezes sem querer tambem nao duplica nada.",
-        d: "E o botao que voce vai usar em 9 de cada 10 vezes."
+        p: "O botão principal, e ele decide sozinho entre comecar e continuar: se já existe trabalho para aquela legenda, retoma exatamente de onde parou; se não existe, cria um novo.",
+        e: "Você traduziu 60 por cento ontem e fechou o notebook. Hoje escolhe a mesma legenda e clica aqui: ele reconhece os blocos que já estavam prontos e comeca do seguinte, sem retraduzir nem cobrar de novo pelo que já estava feito. Clicar duas vezes sem querer também não duplica nada.",
+        d: "É o botão que você vai usar em 9 de cada 10 vezes."
       },
       resumeBtn: {
         t: "Retomar selecionado",
-        p: "Continua o trabalho que estiver marcado na lista Trabalhos, aqui embaixo. A diferenca para o botao azul e que este ignora o campo de legenda la em cima e vai pelo cartao que voce escolheu na lista.",
-        e: "Serve principalmente quando a lista mostra um trabalho com status <code>stalled</code>, que quer dizer: o progresso esta salvo, mas o programa que estava traduzindo morreu. Clique no cartao dele e depois neste botao.",
-        d: "Use quando quiser continuar um trabalho especifico da lista."
+        p: "Continua o trabalho que estiver marcado na lista Trabalhos, aqui embaixo. A diferença para o botão azul e que este ignora o campo de legenda la em cima e vai pelo cartão que você escolheu na lista.",
+        e: "Serve principalmente quando a lista mostra um trabalho com status <code>stalled</code>, que quer dizer: o progresso está salvo, mas o programa que estava traduzindo morreu. Clique no cartão dele e depois neste botão.",
+        d: "Use quando quiser continuar um trabalho específico da lista."
       },
       stop: {
         t: "Parar",
-        p: "Pede para parar. Nao e um corte seco: ele deixa a chamada que ja esta no ar terminar, grava tudo em disco e so entao para.",
-        e: "Por isso pode levar uns 10 segundos ate o status virar <code>stopped</code>, e isso e normal. Nada do que ja foi traduzido se perde: depois e so clicar em Iniciar ou retomar e ele volta do mesmo ponto.",
+        p: "Pede para parar. Não é um corte seco: ele deixa a chamada que já está no ar terminar, grava tudo em disco é só então para.",
+        e: "Por isso pode levar uns 10 segundos até o status virar <code>stopped</code>, e isso é normal. Nada do que já foi traduzido se perde: depois é só clicar em Iniciar ou retomar e ele volta do mesmo ponto.",
         d: "Pode usar sem medo."
       },
       jobs: {
         t: "Trabalhos",
-        p: "Todo trabalho que ja foi iniciado, com o quanto cada um andou. Clique num cartao para ver o status, o log e as falas dele no painel da direita.",
-        e: "Os status querem dizer: <code>running</code> traduzindo agora &middot; <code>stopped</code> voce mandou parar &middot; <code>stalled</code> o progresso esta salvo mas ninguem esta traduzindo, porque o programa caiu &middot; <code>complete</code> terminou limpo &middot; <code>incomplete</code> terminou faltando coisa &middot; <code>failed</code> deu erro.",
-        d: "Clique num cartao para acompanhar aquele trabalho."
+        p: "Todo trabalho que já foi iniciado, com o quanto cada um andou. Clique num cartão para ver o status, o log e as falas dele no painel da direita.",
+        e: "Os status querem dizer: <code>running</code> traduzindo agora &middot; <code>stopped</code> você mandou parar &middot; <code>stalled</code> o progresso está salvo mas ninguém está traduzindo, porque o programa caiu &middot; <code>complete</code> terminou limpo &middot; <code>incomplete</code> terminou faltando coisa &middot; <code>failed</code> deu erro.",
+        d: "Clique num cartão para acompanhar aquele trabalho."
       },
       status: {
         t: "Status",
-        p: "O resumo do trabalho selecionado. Ele se atualiza sozinho a cada 2,5 segundos, entao voce nao precisa recarregar a pagina nem ficar clicando em nada.",
-        e: "Duas situacoes merecem sua atencao. <code>stalled</code> significa que ninguem esta traduzindo e voce precisa clicar em Retomar selecionado. E <code>lote insistindo</code> significa que um bloco ja passou por todos os modelos uma vez e voltou ao comeco da fila: vale abrir o log e ver do que ele esta reclamando.",
-        d: "So olhe. Nao ha nada para configurar aqui."
+        p: "O resumo do trabalho selecionado. Ele se atualiza sozinho a cada 2,5 segundos, então você não precisa recarregar a página nem ficar clicando em nada.",
+        e: "Duas situações merecem sua atenção. <code>stalled</code> significa que ninguém está traduzindo e você precisa clicar em Retomar selecionado. E <code>lote insistindo</code> significa que um bloco já passou por todos os modelos uma vez e voltou ao começo da fila: vale abrir o log e ver do que ele está reclamando.",
+        d: "Só olhe. Não há nada para configurar aqui."
       },
       mProgress: {
         t: "Progresso",
-        p: "Quanto do filme ja tem traducao aprovada. Conta falas, e nao blocos: uma fala so entra nesta conta depois de passar por toda a validacao.",
+        p: "Quanto do filme já tem tradução aprovada. Conta falas, e não blocos: uma fala só entra nesta conta depois de passar por toda a validação.",
         e: "1736 falas prontas de um total de 2435 aparecem aqui como 71 por cento.",
         d: ""
       },
       mBatch: {
         t: "Lote",
-        p: "Qual bloco esta sendo traduzido agora e quantos blocos o filme tem no total.",
-        e: "<code>63/87</code> quer dizer que ele esta no bloco 63 de 87. Quando nao ha nada rodando, aparece so o total, tipo <code>-/87</code>.",
+        p: "Qual bloco está sendo traduzido agora e quantos blocos o filme tem no total.",
+        e: "<code>63/87</code> quer dizer que ele está no bloco 63 de 87. Quando não há nada rodando, aparece só o total, tipo <code>-/87</code>.",
         d: ""
       },
       mModel: {
         t: "Modelo atual",
-        p: "Qual modelo esta atendendo neste momento.",
-        e: "Se aparecer <code>nova-pro</code> aqui quando o primeiro da sua lista e o <code>claude-sonnet-4-6</code>, e sinal de que o Sonnet falhou naquele bloco e a reserva entrou. Acontecer de vez em quando e normal; acontecer o tempo todo e motivo para olhar o log.",
+        p: "Qual modelo está atendendo neste momento.",
+        e: "Se aparecer <code>nova-pro</code> aqui quando o primeiro da sua lista é o <code>claude-sonnet-4-6</code>, e sinal de que o Sonnet falhou naquele bloco e a reserva entrou. Acontecer de vez em quando é normal; acontecer o tempo todo e motivo para olhar o log.",
         d: ""
       },
       mErrors: {
         t: "Erros QC",
-        p: "Falas reprovadas por erro grave: texto vazio, o modelo se recusando a traduzir, italico quebrado, ou o simbolo de musica que sumiu. Enquanto este numero nao for zero, o arquivo final sai com INCOMPLETO no nome.",
-        e: "Este contador nao inclui os avisos leves, como linha comprida ou leitura rapida demais. Aviso nao impede o arquivo de sair como OK; erro grave impede.",
+        p: "Falas reprovadas por erro grave: texto vazio, o modelo se recusando a traduzir, itálico quebrado, ou o simbolo de música que sumiu. Enquanto este número não for zero, o arquivo final sai com INCOMPLETO no nome.",
+        e: "Este contador não inclui os avisos leves, como linha comprida ou leitura rápida demais. Aviso não impede o arquivo de sair como OK; erro grave impede.",
         d: ""
       },
       mReview: {
         t: "Revisar",
-        p: "Falas que o sistema achou suspeitas de nao terem sido traduzidas, mas que dois modelos diferentes devolveram exatamente iguais. Quando isso acontece, quem provavelmente esta errado e a suspeita, e nao os modelos.",
-        e: "Refrao de musica como <code>Guli guli guli guli ram sam sam</code> e para ficar igual mesmo: nao existe traducao disso. A fala entra nesta conta para voce dar uma conferida depois, mas nao impede o arquivo de sair como OK.",
+        p: "Falas que o sistema achou suspeitas de não terem sido traduzidas, mas que dois modelos diferentes devolveram exatamente iguais. Quando isso acontece, quem provavelmente está errado é a suspeita, e não os modelos.",
+        e: "Refrão de música como <code>Guli guli guli guli ram sam sam</code> é para ficar igual mesmo: não existe tradução disso. A fala entra nesta conta para você dar uma conferida depois, mas não impede o arquivo de sair como OK.",
         d: ""
       },
       arquivos: {
         t: "Arquivos gerados",
-        p: "Tudo e gravado na mesma pasta onde esta a legenda original. Nada vai para lugar escondido do sistema. Sao tres coisas:",
-        e: "<b>1. A legenda traduzida.</b> O final do nome conta o que aconteceu: <code>.pt-BR.EM_ANDAMENTO.srt</code> enquanto trabalha, <code>.pt-BR.OK.srt</code> quando terminou limpo, <code>.pt-BR.INCOMPLETO.srt</code> quando faltou algo. E um .srt comum: da para arrastar direto no VLC. Quando termina, ele apaga sozinho as versoes antigas, para nao sobrar tres arquivos parecidos te confundindo.<br><br><b>2. Um arquivo <code>.translator-state.json</code></b> colado na legenda traduzida. E a etiqueta dela. E por causa desse arquivo que voce pode arrastar uma legenda INCOMPLETO de volta aqui e o sistema reconhecer de qual trabalho ela veio, em vez de comecar do zero.<br><br><b>3. Uma pasta <code>.srt_translator_jobs</code></b>, que fica escondida por comecar com ponto. Dentro dela ficam o progresso salvo, o log completo e o <code>quality_report.json</code>, que lista fala por fala tudo que foi apontado.",
-        d: "Para assistir o filme, voce so precisa do arquivo .OK.srt."
+        p: "Tudo é gravado na mesma pasta onde está a legenda original. Nada vai para lugar escondido do sistema. São três coisas:",
+        e: "<b>1. A legenda traduzida.</b> O final do nome conta o que aconteceu: <code>.pt-BR.EM_ANDAMENTO.srt</code> enquanto trabalha, <code>.pt-BR.OK.srt</code> quando terminou limpo, <code>.pt-BR.INCOMPLETO.srt</code> quando faltou algo. É um .srt comum: da para arrastar direto no VLC. Quando termina, ele apaga sozinho as versões antigas, para não sobrar três arquivos parecidos te confundindo.<br><br><b>2. Um arquivo <code>.translator-state.json</code></b> colado na legenda traduzida. É a etiqueta dela. É por causa desse arquivo que você pode arrastar uma legenda INCOMPLETO de volta aqui é o sistema reconhecer de qual trabalho ela veio, em vez de comecar do zero.<br><br><b>3. Uma pasta <code>.srt_translator_jobs</code></b>, que fica escondida por comecar com ponto. Dentro dela ficam o progresso salvo, o log completo e o <code>quality_report.json</code>, que lista fala por fala tudo que foi apontado.",
+        d: "Para assistir o filme, você só precisa do arquivo .OK.srt."
       },
       log: {
         t: "Log",
-        p: "O que esta acontecendo, em ordem e com hora. Tambem fica salvo em disco, entao voce nao perde nada ao fechar a pagina.",
-        e: "Um ciclo saudavel se repete assim: <i>Iniciando traducao do lote N</i>, <i>Chamando Bedrock</i>, <i>Resposta validada</i>, <i>Lote N concluido</i>. As cores ajudam: cinza e rotina, verde e coisa concluida, amarelo e aviso (ele vai tentar de novo sozinho) e vermelho e erro. Amarelo repetido no mesmo bloco quer dizer que a validacao esta recusando as respostas; o motivo vem escrito no fim da linha.",
-        d: "So olhe quando algo parecer travado."
+        p: "O que está acontecendo, em ordem e com hora. Também fica salvo em disco, então você não perde nada ao fechar a página.",
+        e: "Um ciclo saudável se repete assim: <i>Iniciando tradução do lote N</i>, <i>Chamando Bedrock</i>, <i>Resposta validada</i>, <i>Lote N concluído</i>. As cores ajudam: cinza e rotina, verde e coisa concluída, amarelo e aviso (ele vai tentar de novo sozinho) e vermelho e erro. Amarelo repetido no mesmo bloco quer dizer que a validação está recusando as respostas; o motivo vem escrito no fim da linha.",
+        d: "Só olhe quando algo parecer travado."
       },
       cmpScope: {
         t: "Escopo da lista",
-        p: "Escolhe se voce esta acompanhando o trabalho acontecer ou revisando o que ja ficou pronto.",
-        e: "<b>Ultimas 60 (ao vivo)</b> mostra so o trecho mais recente e vai se atualizando conforme cada bloco fecha: e o modo de assistir a traducao sair.<br><br><b>Filme inteiro</b> carrega todas as falas ja traduzidas de uma vez, para voce navegar e revisar do comeco ao fim. Num filme de 1770 falas isso e bem mais pesado, entao ele so e buscado quando voce pede, e nao a cada atualizacao da tela.",
+        p: "Escolhe se você está acompanhando o trabalho acontecer ou revisando o que já ficou pronto.",
+        e: "<b>Últimas 60 (ao vivo)</b> mostra só o trecho mais recente e vai se atualizando conforme cada bloco fecha: é o modo de assistir a tradução sair.<br><br><b>Filme inteiro</b> carrega todas as falas já traduzidas de uma vez, para você navegar e revisar do começo ao fim. Num filme de 1770 falas isso é bem mais pesado, então ele só e buscado quando você pede, e não a cada atualização da tela.",
         d: "Rodando, use ao vivo. Terminado, use filme inteiro."
       },
       cmpSearch: {
         t: "Buscar no texto",
-        p: "Filtra a lista por um trecho de texto, procurando ao mesmo tempo no original em ingles e na traducao em portugues.",
-        e: "Digite o nome de um personagem, por exemplo <code>Aaron</code>, e veja de uma vez todas as falas em que ele aparece: da para conferir se o nome e o tratamento ficaram consistentes no filme inteiro. Tambem serve para uma expressao especifica que voce quer saber como foi resolvida.",
+        p: "Filtra a lista por um trecho de texto, procurando ao mesmo tempo no original em inglês e na tradução em português.",
+        e: "Digite o nome de um personagem, por exemplo <code>Aaron</code>, e veja de uma vez todas as falas em que ele aparece: da para conferir se o nome é o tratamento ficaram consistentes no filme inteiro. Também serve para uma expressão específica que você quer saber como foi resolvida.",
         d: "Combine com o escopo filme inteiro para revisar de verdade."
       },
       cmpFollow: {
         t: "Acompanhar",
-        p: "Mantem a lista grudada na fala traduzida mais recente, rolando sozinha conforme o trabalho avanca. So aparece enquanto existe traducao em andamento: com o trabalho terminado, nao ha nada novo chegando para acompanhar.",
-        e: "Se voce rolar para cima para ler alguma coisa, ele se desmarca sozinho para nao arrastar a tela debaixo do seu olho. Quando voce volta ao fim da lista, ele se remarca. Pedir <b>filme inteiro</b> tambem desliga, porque quem pediu tudo quer navegar.",
-        d: "Deixe ligado enquanto assiste a traducao acontecer."
+        p: "Mantem a lista grudada na fala traduzida mais recente, rolando sozinha conforme o trabalho avanca. Só aparece enquanto existe tradução em andamento: com o trabalho terminado, não há nada novo chegando para acompanhar.",
+        e: "Se você rolar para cima para ler alguma coisa, ele se desmarca sozinho para não arrastar a tela debaixo do seu olho. Quando você volta ao fim da lista, ele se remarca. Pedir <b>filme inteiro</b> também desliga, porque quem pediu tudo quer navegar.",
+        d: "Deixe ligado enquanto assiste a tradução acontecer."
       },
       cmpReview: {
-        t: "So revisar",
-        p: "Mostra apenas as falas que ficaram marcadas como <b>revisar</b>, escondendo todo o resto. So aparece quando existe pelo menos uma; o numero ao lado diz quantas sao.",
-        e: "Sao as falas em que a validacao achou que o texto nao tinha sido traduzido, mas dois modelos diferentes devolveram exatamente igual ao original. Quase sempre e refrao de musica ou onomatopeia, que devem mesmo ficar iguais. Como a duvida existe, elas ficam separadas para voce bater o olho.<br><br>Se o contador nao aparece, nenhuma fala precisou disso e nao ha o que revisar.",
-        d: "Marque para conferir so essas, no fim do trabalho."
+        t: "Só revisar",
+        p: "Mostra apenas as falas que ficaram marcadas como <b>revisar</b>, escondendo todo o resto. Só aparece quando existe pelo menos uma; o número ao lado diz quantas são.",
+        e: "São as falas em que a validação achou que o texto não tinha sido traduzido, mas dois modelos diferentes devolveram exatamente igual ao original. Quase sempre e refrão de música ou onomatopeia, que devem mesmo ficar iguais. Como a dúvida existe, elas ficam separadas para você bater o olho.<br><br>Se o contador não aparece, nenhuma fala precisou disso e não há o que revisar.",
+        d: "Marque para conferir só essas, no fim do trabalho."
       },
       comparar: {
-        t: "Comparar traducao",
-        p: "As falas ja traduzidas em tres colunas: numero e tempo na estreita da esquerda, o texto original no meio e o portugues a direita. E aqui que voce julga se a traducao esta boa, sem precisar abrir o arquivo.",
-        e: "<b>Ultimas 60 (ao vivo)</b> acompanha o trabalho acontecendo: a lista se atualiza a cada lote que fecha e gruda na fala mais recente. <b>Filme inteiro</b> carrega todas as falas ja traduzidas para voce navegar e revisar do comeco ao fim.<br><br>A busca filtra pelo texto nos dois idiomas, entao da para procurar um nome ou uma expressao e ver como ela ficou em todas as vezes que aparece. <b>So revisar</b> mostra apenas as falas que dois modelos devolveram iguais ao original, que sao as unicas que pedem olho humano.<br><br>Se voce rolar para cima para ler algo, o acompanhamento automatico desliga sozinho e volta quando voce chegar no fim de novo.",
-        d: "So olhe. E o melhor lugar para julgar se a traducao esta boa."
+        t: "Comparar tradução",
+        p: "As falas já traduzidas em três colunas: número e tempo na estreita da esquerda, o texto original no meio e o português à direita. É aqui que você julga se a tradução está boa, sem precisar abrir o arquivo.",
+        e: "<b>Últimas 60 (ao vivo)</b> acompanha o trabalho acontecendo: a lista se atualiza a cada lote que fecha e gruda na fala mais recente. <b>Filme inteiro</b> carrega todas as falas já traduzidas para você navegar e revisar do começo ao fim.<br><br>A busca filtra pelo texto nos dois idiomas, então da para procurar um nome ou uma expressão e ver como ela ficou em todas as vezes que aparece. <b>Só revisar</b> mostra apenas as falas que dois modelos devolveram iguais ao original, que são as únicas que pedem olho humano.<br><br>Se você rolar para cima para ler algo, o acompanhamento automático desliga sozinho e volta quando você chegar no fim de novo.",
+        d: "Só olhe. É o melhor lugar para julgar se a tradução está boa."
       },
       preview: {
         t: "Lote atual",
-        p: "As falas do bloco que esta sendo traduzido agora. Em cinza o texto original e, embaixo, a traducao assim que ela chega.",
-        e: "E onde voce ve a qualidade saindo em tempo real, sem precisar abrir o arquivo no meio do caminho para espiar.",
+        p: "As falas do bloco que está sendo traduzido agora. Em cinza o texto original e, embaixo, a tradução assim que ela chega.",
+        e: "É onde você ve a qualidade saindo em tempo real, sem precisar abrir o arquivo no meio do caminho para espiar.",
         d: ""
       }
     };
@@ -3764,7 +3764,7 @@ UI_HTML = r"""<!doctype html>
       const h = HELP[key];
       if (!h) return false;
       helpBox.innerHTML = `<h4>${escapeHtml(h.t)}</h4><p>${h.p}</p>` +
-        (h.e ? `<div class="ex"><b>Na pratica</b>${h.e}</div>` : "") +
+        (h.e ? `<div class="ex"><b>Na prática</b>${h.e}</div>` : "") +
         (h.d ? `<div class="tip"><b>Precisa mexer?</b> ${h.d}</div>` : "") +
         `<p class="pin-hint">Clique no i para fixar. Esc fecha.</p>`;
       return true;
@@ -3844,7 +3844,7 @@ UI_HTML = r"""<!doctype html>
         await navigator.clipboard.writeText(text);
         if (btn) { const old = btn.textContent; btn.textContent = "Copiado!"; setTimeout(() => btn.textContent = old, 1600); }
       } catch (e) {
-        toast("Nao consegui copiar", "O navegador bloqueou o acesso a area de transferencia. Selecione o texto manualmente.", "warn");
+        toast("Não consegui copiar", "O navegador bloqueou o acesso a área de transferência. Selecione o texto manualmente.", "warn");
       }
     }
     function busy(sel, on) {
@@ -3860,9 +3860,9 @@ UI_HTML = r"""<!doctype html>
       try {
         res = await fetch(path, opts);
       } catch (e) {
-        throw new Error("Nao consegui falar com o servidor local. Ele ainda esta rodando no terminal?");
+        throw new Error("Não consegui falar com o servidor local. Ele ainda está rodando no terminal?");
       }
-      try { data = await res.json(); } catch (e) { throw new Error("Resposta invalida do servidor (HTTP " + res.status + ")."); }
+      try { data = await res.json(); } catch (e) { throw new Error("Resposta inválida do servidor (HTTP " + res.status + ")."); }
       if (!res.ok) throw new Error(data.error || ("Erro HTTP " + res.status));
       return data;
     }
@@ -3890,7 +3890,7 @@ UI_HTML = r"""<!doctype html>
       };
     }
 
-    /* ---------- acoes ---------- */
+    /* ---------- ações ---------- */
     async function refreshFiles() {
       const data = await api("/api/files");
       const select = document.querySelector("#file");
@@ -3938,13 +3938,13 @@ UI_HTML = r"""<!doctype html>
       if (prev === undefined || prev === job.status) return;
       const name = shortPath(job.source_path || "");
       if (job.status === "complete") {
-        toast("Traducao concluida", `${name} — arquivo pronto em ${fileName(job.output)}`, "success", {copy: job.output, timeout: 0});
+        toast("Tradução concluída", `${name} — arquivo pronto em ${fileName(job.output)}`, "success", {copy: job.output, timeout: 0});
       } else if (job.status === "incomplete") {
         toast("Terminou com pendencias", `${name} — saiu como ${fileName(job.output)}. Repasse esse arquivo e clique em Iniciar ou retomar para ele completar o que faltou.`, "warn", {timeout: 0});
       } else if (job.status === "failed") {
         toast("O trabalho falhou", job.last_error || name, "error", {timeout: 0});
       } else if (job.status === "stalled") {
-        toast("Processo parou sozinho", `${name} — o progresso esta salvo. Clique em Retomar selecionado para continuar.`, "warn", {timeout: 0});
+        toast("Processo parou sozinho", `${name} — o progresso está salvo. Clique em Retomar selecionado para continuar.`, "warn", {timeout: 0});
       }
     }
     async function startJob() {
@@ -3958,12 +3958,12 @@ UI_HTML = r"""<!doctype html>
         toast("Trabalho iniciado", `${fileName(cfg.path)} — acompanhe pelo log abaixo. Pode fechar esta aba: o servidor continua traduzindo.`, "success");
       } finally { busy("#start", false); }
       // refresh separado: se ele falhar, o trabalho JA comecou e dizer
-      // "nao consegui iniciar" seria mentira.
+      // "não consegui iniciar" seria mentira.
       try { await refreshJobs(); await refreshJob(); }
-      catch (e) { toast("Trabalho rodando, mas a tela nao atualizou", e.message, "warn"); }
+      catch (e) { toast("Trabalho rodando, mas a tela não atualizou", e.message, "warn"); }
     }
     async function resumeJob() {
-      if (!selectedJob) { toast("Nenhum trabalho selecionado", "Clique num cartao na lista Trabalhos primeiro.", "warn"); return; }
+      if (!selectedJob) { toast("Nenhum trabalho selecionado", "Clique num cartão na lista Trabalhos primeiro.", "warn"); return; }
       const cfg = formConfig();
       cfg.job_id = selectedJob;
       busy("#resume", true);
@@ -3971,30 +3971,30 @@ UI_HTML = r"""<!doctype html>
         const data = await api("/api/resume", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(cfg)});
         selectedJob = data.job_id;
         lastStatus[data.job_id] = "running";
-        toast("Trabalho retomado", "Ele continua do ponto em que parou; nada ja traduzido sera refeito.", "success");
+        toast("Trabalho retomado", "Ele continua do ponto em que parou; nada já traduzido será refeito.", "success");
       } finally { busy("#resume", false); }
       try { await refreshJobs(); await refreshJob(); }
-      catch (e) { toast("Trabalho rodando, mas a tela nao atualizou", e.message, "warn"); }
+      catch (e) { toast("Trabalho rodando, mas a tela não atualizou", e.message, "warn"); }
     }
     async function stopJob() {
       if (!selectedJob) return;
       busy("#stop", true);
       try {
         await api("/api/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({job_id: selectedJob})});
-        toast("Parada solicitada", "A chamada em andamento vai terminar antes de parar. O progresso ja esta salvo.", "info");
+        toast("Parada solicitada", "A chamada em andamento vai terminar antes de parar. O progresso já está salvo.", "info");
         await refreshJob();
       } finally { busy("#stop", false); }
     }
     async function runDoctor() {
       const cfg = formConfig();
       busy("#doctor", true);
-      const pending = toast("Testando Bedrock...", "Fazendo uma chamada minima para cada modelo da lista.", "info", {timeout: 0});
+      const pending = toast("Testando Bedrock...", "Fazendo uma chamada mínima para cada modelo da lista.", "info", {timeout: 0});
       try {
         const data = await api("/api/doctor", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(cfg)});
         pending.remove();
         const bad = data.results.filter(r => !r.ok);
         if (data.ok_count === 0) {
-          toast("Nenhum modelo respondeu", `Confira o profile (${cfg.profile}) e a regiao (${cfg.region}). Primeiro erro: ` + ((bad[0] && bad[0].error) || "").slice(0, 220), "error", {timeout: 0});
+          toast("Nenhum modelo respondeu", `Confira o profile (${cfg.profile}) e a região (${cfg.region}). Primeiro erro: ` + ((bad[0] && bad[0].error) || "").slice(0, 220), "error", {timeout: 0});
         } else if (bad.length) {
           toast(`${data.ok_count} de ${data.results.length} modelos OK`, "Sem acesso: " + bad.map(r => shortModel(r.model)).join(", ") + ". Da para traduzir assim mesmo; libere os demais em Amazon Bedrock, Model access, se quiser mais fallback.", "warn", {timeout: 0});
         } else {
@@ -4046,39 +4046,39 @@ UI_HTML = r"""<!doctype html>
       const q = job.quality || {};
       if (job.status === "complete") {
         box.className = "result show ok";
-        box.innerHTML = `<h3>Traducao concluida</h3>
-          <div class="sub">${job.total_cues || 0} legendas traduzidas, nenhum erro duro de QC. O arquivo esta pronto para usar.</div>
+        box.innerHTML = `<h3>Tradução concluída</h3>
+          <div class="sub">${job.total_cues || 0} legendas traduzidas, nenhum erro duro de QC. O arquivo está pronto para usar.</div>
           <div class="filebox"><div class="fb-main"><div class="fb-name">${escapeHtml(fileName(out))}</div>
             <div class="fb-dir">${escapeHtml(dirName(out))}</div></div>
             <button data-path="${escapeHtml(out)}">Copiar caminho</button></div>
           <ul>
-            <li>E um SRT normal em UTF-8: abra no VLC pelo menu Legenda, Adicionar arquivo de legenda.</li>
-            <li>Mesma quantidade de legendas e mesmos tempos do original, entao sincroniza igual.</li>
+            <li>É um SRT normal em UTF-8: abra no VLC pelo menu Legenda, Adicionar arquivo de legenda.</li>
+            <li>Mesma quantidade de legendas e mesmos tempos do original, então sincroniza igual.</li>
             ${job.review_cues ? `<li><b>${job.review_cues}</b> legendas foram aceitas por consenso entre modelos e valem uma conferida.</li>` : ""}
-            ${q.warning_cues ? `<li>${q.warning_cues} avisos de legibilidade no relatorio de qualidade. Avisos nao bloqueiam o arquivo.</li>` : ""}
+            ${q.warning_cues ? `<li>${q.warning_cues} avisos de legibilidade no relatório de qualidade. Avisos não bloqueiam o arquivo.</li>` : ""}
           </ul>`;
       } else if (job.status === "incomplete") {
         box.className = "result show warn";
         box.innerHTML = `<h3>Terminou com pendencias</h3>
-          <div class="sub">${job.last_error || "Sobraram legendas sem traducao aceita."}</div>
+          <div class="sub">${job.last_error || "Sobraram legendas sem tradução aceita."}</div>
           <div class="filebox"><div class="fb-main"><div class="fb-name">${escapeHtml(fileName(out))}</div>
             <div class="fb-dir">${escapeHtml(dirName(out))}</div></div>
             <button data-path="${escapeHtml(out)}">Copiar caminho</button></div>
           <ul>
-            <li>O sufixo <b>INCOMPLETO</b> no nome e o aviso de que faltou coisa.</li>
+            <li>O sufixo <b>INCOMPLETO</b> no nome é o aviso de que faltou coisa.</li>
             <li>As legendas que faltaram ficam marcadas dentro do arquivo com <code>[TRADUCAO_PENDENTE]</code>.</li>
-            <li>Para completar: deixe esta legenda selecionada e clique em <b>Iniciar ou retomar</b>. Ele refaz so o que faltou e, ao terminar, troca o arquivo por um <code>.OK.srt</code>.</li>
+            <li>Para completar: deixe esta legenda selecionada e clique em <b>Iniciar ou retomar</b>. Ele refaz só o que faltou e, ao terminar, troca o arquivo por um <code>.OK.srt</code>.</li>
           </ul>`;
       } else if (job.status === "failed") {
         box.className = "result show bad";
         box.innerHTML = `<h3>O trabalho falhou</h3>
-          <div class="sub">${escapeHtml(job.last_error || "Erro nao identificado.")}</div>
-          <ul><li>Clique em <b>Testar Bedrock</b> para checar credencial, regiao e acesso aos modelos.</li>
-          <li>Nada do que ja foi traduzido se perdeu: depois de resolver, use <b>Retomar selecionado</b>.</li></ul>`;
+          <div class="sub">${escapeHtml(job.last_error || "Erro não identificado.")}</div>
+          <ul><li>Clique em <b>Testar Bedrock</b> para checar credencial, região e acesso aos modelos.</li>
+          <li>Nada do que já foi traduzido se perdeu: depois de resolver, use <b>Retomar selecionado</b>.</li></ul>`;
       } else if (job.status === "stalled") {
         box.className = "result show warn";
         box.innerHTML = `<h3>O processo parou sozinho</h3>
-          <div class="sub">O progresso esta salvo em disco, mas ninguem esta traduzindo agora. Normalmente o servidor foi encerrado.</div>
+          <div class="sub">O progresso está salvo em disco, mas ninguém está traduzindo agora. Normalmente o servidor foi encerrado.</div>
           <ul><li>Clique em <b>Retomar selecionado</b> para continuar de onde parou.</li></ul>`;
       } else {
         box.className = "result";
@@ -4110,8 +4110,8 @@ UI_HTML = r"""<!doctype html>
       document.querySelector("#paths").innerHTML =
         pathLine("Original", job.source_path) +
         pathLine("Traduzida", job.final_output_path || job.last_written_output) +
-        pathLine("Relatorio", job.quality_report_path) +
-        `<div class="pathline"><span class="pk">Numeros</span><span class="pv">${done}/${total} traduzidas &middot; ${job.pending_cues || q.pending_cues || 0} pendentes &middot; ${job.error_cues || 0} erros &middot; ${job.warning_cues || q.warning_cues || 0} avisos${usage.totalTokens ? ` &middot; ${Number(usage.totalTokens).toLocaleString("pt-BR")} tokens` : ""}</span></div>`;
+        pathLine("Relatório", job.quality_report_path) +
+        `<div class="pathline"><span class="pk">Números</span><span class="pv">${done}/${total} traduzidas &middot; ${job.pending_cues || q.pending_cues || 0} pendentes &middot; ${job.error_cues || 0} erros &middot; ${job.warning_cues || q.warning_cues || 0} avisos${usage.totalTokens ? ` &middot; ${Number(usage.totalTokens).toLocaleString("pt-BR")} tokens` : ""}</span></div>`;
 
       const err = document.querySelector("#lastError");
       const showErr = job.last_error && job.status !== "complete";
@@ -4122,7 +4122,7 @@ UI_HTML = r"""<!doctype html>
       const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
       log.innerHTML = (job.log_tail || []).map(e => {
         const lvl = e.level || "INFO";
-        const good = /concluido|sucesso|validada|pronto/i.test(e.message || "") ? " good" : "";
+        const good = /concluído|sucesso|validada|pronto/i.test(e.message || "") ? " good" : "";
         return `<div class="ln ${lvl}${good}"><span class="ts">${escapeHtml((e.ts || "").slice(11, 19))}</span> ${escapeHtml(e.message || "")}${escapeHtml(formatEvent(e))}</div>`;
       }).join("");
       if (atBottom) log.scrollTop = log.scrollHeight;
@@ -4132,7 +4132,7 @@ UI_HTML = r"""<!doctype html>
       preview.innerHTML = items.length ? items.map(renderCue).join("") : "<div class='empty'>Sem lote ativo no momento.</div>";
       renderCompare(job);
     }
-    let escopoTocado = false;    // o usuario escolheu o escopo na mao?
+    let escopoTocado = false;    // o usuário escolheu o escopo na mão?
     let escopoAjustadoPara = null;
     let fullCompare = null;      // lista completa, buscada sob demanda
     let fullCompareDone = -1;    // quantas falas existiam quando ela foi buscada
@@ -4147,8 +4147,8 @@ UI_HTML = r"""<!doctype html>
     }
 
     function renderCompare(job) {
-      // Controle que nao faz nada no estado atual so atrapalha: acompanhar sem trabalho
-      // rodando nao tem o que seguir, e filtrar por revisao sem nenhuma marcada esvazia
+      // Controle que não faz nada no estado atual só atrapalha: acompanhar sem trabalho
+      // rodando não tem o que seguir, e filtrar por revisão sem nenhuma marcada esvazia
       // a lista sem motivo.
       const rodando = job.status === "running";
       const revisar = job.review_cues || 0;
@@ -4156,21 +4156,21 @@ UI_HTML = r"""<!doctype html>
       const wrapReview = document.querySelector("#wrapReview");
       wrapFollow.hidden = !rodando;
       wrapReview.hidden = revisar === 0;
-      wrapReview.querySelector("label").childNodes[1].nodeValue = ` so revisar (${revisar})`;
+      wrapReview.querySelector("label").childNodes[1].nodeValue = ` só revisar (${revisar})`;
       if (!rodando) document.querySelector("#cmpFollow").checked = false;
       if (revisar === 0) document.querySelector("#cmpReview").checked = false;
       const seletor = document.querySelector("#cmpScope");
-      // Ao abrir um trabalho que ja terminou, o util e a lista inteira. Isso e feito
+      // Ao abrir um trabalho que já terminou, o útil é a lista inteira. Isso é feito
       // uma vez por trabalho e nunca sobrescreve uma escolha manual, nem puxa o
-      // usuario para fora da visao ao vivo quando o trabalho acaba de terminar.
+      // usuário para fora da visão ao vivo quando o trabalho acaba de terminar.
       if (!escopoTocado && escopoAjustadoPara !== job.job_id) {
         escopoAjustadoPara = job.job_id;
         if (!rodando && (job.done_cues || 0) > 0) seletor.value = "all";
       }
       const scope = seletor.value;
       if (scope === "all") {
-        // busca a lista inteira uma vez e so refaz quando o numero de falas muda,
-        // para nao mandar o filme todo a cada polling
+        // busca a lista inteira uma vez é só refaz quando o número de falas muda,
+        // para não mandar o filme todo a cada polling
         ensureFullCompare(job)
           .then(items => paintCompare(items, job, true))
           .catch(() => paintCompare(job.compare || [], job, false));
@@ -4197,12 +4197,12 @@ UI_HTML = r"""<!doctype html>
       if (!list.length) {
         box.innerHTML = "<div class='empty' style='padding:12px'>" +
           (term ? "Nada encontrado para essa busca."
-                : onlyReview ? "Nenhuma fala marcada para revisao."
+                : onlyReview ? "Nenhuma fala marcada para revisão."
                 : "Nada traduzido ainda. As falas aparecem aqui conforme cada lote fecha.") +
           "</div>";
         return;
       }
-      box.innerHTML = "<div class='cmp-legend'><span>fala</span><span>original</span><span>portugues</span></div>" +
+      box.innerHTML = "<div class='cmp-legend'><span>fala</span><span>original</span><span>português</span></div>" +
         list.map(i => `<div class="cmp-row${i.review ? " review" : ""}">
           <div class="cmp-id">#${i.id}<span style="display:block">${escapeHtml((i.time || "").slice(0, 8))}</span>${i.review ? "<span class='flag'>revisar</span>" : ""}</div>
           <div class="cmp-src">${escapeHtml(i.source || "")}</div>
@@ -4237,7 +4237,7 @@ UI_HTML = r"""<!doctype html>
       busy("#refresh", true);
       try {
         const n = await refreshFiles(); await refreshJobs(); await refreshJob();
-        toast("Lista atualizada", `${n} legenda(s) encontradas na pasta base. Nenhuma traducao foi alterada.`, "info", {timeout: 4000});
+        toast("Lista atualizada", `${n} legenda(s) encontradas na pasta base. Nenhuma tradução foi alterada.`, "info", {timeout: 4000});
       } catch (e) { toast("Falha ao atualizar", e.message, "error"); }
       finally { busy("#refresh", false); }
     };
@@ -4257,13 +4257,13 @@ UI_HTML = r"""<!doctype html>
       const box = ev.target;
       const noFim = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
       const follow = document.querySelector("#cmpFollow");
-      // rolar para tras significa que o usuario quer ler algo; nao arraste a tela dele
+      // rolar para trás significa que o usuário quer ler algo; não arraste a tela dele
       if (!noFim && follow.checked) follow.checked = false;
       if (noFim && !follow.checked) follow.checked = true;
     });
-    document.querySelector("#start").onclick = () => startJob().catch(err => toast("Nao consegui iniciar", err.message, "error"));
-    document.querySelector("#resume").onclick = () => resumeJob().catch(err => toast("Nao consegui retomar", err.message, "error"));
-    document.querySelector("#stop").onclick = () => stopJob().catch(err => toast("Nao consegui parar", err.message, "error"));
+    document.querySelector("#start").onclick = () => startJob().catch(err => toast("Não consegui iniciar", err.message, "error"));
+    document.querySelector("#resume").onclick = () => resumeJob().catch(err => toast("Não consegui retomar", err.message, "error"));
+    document.querySelector("#stop").onclick = () => stopJob().catch(err => toast("Não consegui parar", err.message, "error"));
     document.querySelector("#doctor").onclick = () => runDoctor().catch(err => toast("Teste do Bedrock falhou", err.message, "error"));
 
     (async function boot() {
@@ -4279,7 +4279,7 @@ UI_HTML = r"""<!doctype html>
 
 
 def render_ui_html() -> str:
-    """Injeta os padroes desta maquina na pagina, para o HTML nao guardar nada pessoal."""
+    """Injeta os padroes desta maquina na pagina, para o HTML não guardar nada pessoal."""
     return (
         UI_HTML.replace("__DEFAULT_PROFILE__", html.escape(DEFAULT_PROFILE, quote=True))
         .replace("__DEFAULT_REGION__", html.escape(DEFAULT_REGION, quote=True))
@@ -4311,7 +4311,7 @@ def find_free_port(host: str, preferred: int) -> int:
                 return port
             except OSError:
                 continue
-    raise RuntimeError("Nao encontrei porta livre para a UI.")
+    raise RuntimeError("Não encontrei porta livre para a UI.")
 
 
 def list_models(args: argparse.Namespace) -> int:
@@ -4345,7 +4345,7 @@ def doctor(args: argparse.Namespace) -> int:
     logger = JsonLogger(echo=True)
     print(f"Python: {sys.version.split()[0]}")
     aws = shutil.which("aws")
-    print(f"AWS CLI: {aws or 'nao encontrado'}")
+    print(f"AWS CLI: {aws or 'não encontrado'}")
     if not aws:
         return 1
     ident = subprocess.run(
@@ -4386,7 +4386,7 @@ def qc_cli(args: argparse.Namespace) -> int:
     translated = Path(args.translated).expanduser().resolve()
     source = Path(args.source).expanduser().resolve() if args.source else discover_resume_source(translated)
     if not source.exists():
-        print("Fonte nao encontrada. Passe --source /caminho/original.srt", file=sys.stderr)
+        print("Fonte não encontrada. Passe --source /caminho/original.srt", file=sys.stderr)
         return 1
     src_doc = SrtDocument.load(source)
     tr_doc = SrtDocument.load(translated)
@@ -4395,7 +4395,7 @@ def qc_cli(args: argparse.Namespace) -> int:
         if idx < len(tr_doc.cues):
             translations[str(cue.id)] = {"status": "ok", "text": tr_doc.cues[idx].text}
         else:
-            translations[str(cue.id)] = {"status": "error", "text": "", "error": "cue ausente na traducao"}
+            translations[str(cue.id)] = {"status": "error", "text": "", "error": "cue ausente na tradução"}
     protected = detect_spelling_variant_tokens(src_doc.cues)
     protected_by_id = {
         cue.id: sorted({token for token in capitalized_tokens(cue.text) if token in protected})
@@ -4414,12 +4414,12 @@ def qc_cli(args: argparse.Namespace) -> int:
     summary = report["summary"]
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if len(src_doc.cues) != len(tr_doc.cues):
-        print(f"AVISO: fonte tem {len(src_doc.cues)} cues; traducao tem {len(tr_doc.cues)} cues.")
+        print(f"AVISO: fonte tem {len(src_doc.cues)} cues; tradução tem {len(tr_doc.cues)} cues.")
     for cue_report in report["cues"][:20]:
         issue_text = "; ".join(f"{i['severity']}:{i['code']}" for i in cue_report["issues"])
         print(f"#{cue_report['id']} {cue_report['time']} {issue_text}")
     if len(report["cues"]) > 20:
-        print(f"... mais {len(report['cues']) - 20} cues com avisos/erros no relatorio.")
+        print(f"... mais {len(report['cues']) - 20} cues com avisos/erros no relatório.")
     return 2 if summary["error_cues"] else 0
 
 
@@ -4468,7 +4468,7 @@ Freud.
     )
     assert report["summary"]["error_cues"] == 0
 
-    # Falha de heuristica precisa ser soft e carregar o payload, para que o lote possa
+    # Falha de heurística precisa ser soft e carregar o payload, para que o lote possa
     # ser aceito por consenso em vez de retentar para sempre.
     vocable_cues = [
         SrtCue(id=1, number=1, timing="00:00:01,000 --> 00:00:03,000", text="Hello there, my friend."),
@@ -4480,14 +4480,14 @@ Freud.
             {"translations": [{"id": 1, "text": "Olá, meu amigo."}, {"id": 2, "text": "♪ Zoop bidoo wappa dinga ♪"}]},
             vocable_batch,
         )
-        raise AssertionError("heuristica deveria ter recusado")
+        raise AssertionError("heurística deveria ter recusado")
     except SoftContractError as exc:
         assert exc.soft and exc.cue_ids == [2] and exc.payload["1"] == "Olá, meu amigo."
     try:
         validate_translation_payload({"translations": [{"id": 1, "text": "Olá."}]}, vocable_batch)
         raise AssertionError("IDs faltando deveria ter recusado")
     except ContractError as exc:
-        assert not exc.soft, "quebra estrutural nao pode virar soft"
+        assert not exc.soft, "quebra estrutural não pode virar soft"
 
     # Consenso exige modelos distintos concordando nos mesmos IDs.
     rec_a = {"model": "modelo-a", "cue_ids": (2,), "payload": {"2": "x"}, "reason": "r", "raw": "", "meta": {}}
@@ -4496,7 +4496,7 @@ Freud.
     assert TranslatorJob.soft_consensus_record([rec_a, dict(rec_a)]) is None
     assert TranslatorJob.soft_consensus_record([rec_a, {**rec_b, "cue_ids": (3,)}]) is None
 
-    # Aceito por consenso vira aviso no QC, nao erro duro.
+    # Aceito por consenso vira aviso no QC, não erro duro.
     flagged = {"status": "ok", "text": "♪ Zoop bidoo wappa dinga ♪", "review_flag": "consenso_heuristica"}
     issues_flagged = cue_quality_issues(vocable_cues[1], flagged, max_lines=2, max_line_length=42, max_cps=17.0)
     assert not any(item["severity"] == "error" for item in issues_flagged)
@@ -4509,8 +4509,8 @@ Freud.
     )
     assert any(item["code"] == "looks_untranslated" for item in issues_plain)
 
-    # CPS e cobrado como regressao contra a fonte: legenda comercial ja costuma passar do
-    # limite, e marcar metade do filme esconderia o que a traducao de fato piorou.
+    # CPS e cobrado como regressao contra a fonte: legenda comercial já costuma passar do
+    # limite, e marcar metade do filme esconderia o que a tradução de fato piorou.
     slow_source = SrtCue(id=1, number="1", timing="00:00:00,000 --> 00:00:04,000", text="Hi.")
     verbose = {"status": "ok", "text": "Uma frase muito comprida que ninguem consegue ler nesse tempo todo aqui."}
     codes_regression = {
@@ -4519,7 +4519,7 @@ Freud.
     }
     assert codes_regression.get("high_cps") == "warning", codes_regression
     fast_source = SrtCue(id=2, number="2", timing="00:00:00,000 --> 00:00:01,000", text="This line is already far too fast to read.")
-    matched = {"status": "ok", "text": "Essa linha ja era rapida demais na fonte."}
+    matched = {"status": "ok", "text": "Essa linha já era rápida demais na fonte."}
     codes_inherited = {
         item["code"]: item["severity"]
         for item in cue_quality_issues(fast_source, matched, max_lines=2, max_line_length=200, max_cps=17.0)
@@ -4550,7 +4550,7 @@ def translate_cli(args: argparse.Namespace) -> int:
     print(f"status: {state.get('status')}")
     print(f"saida: {state.get('final_output_path') or state.get('last_written_output')}")
     if state.get("last_error"):
-        print(f"ultimo erro: {state.get('last_error')}")
+        print(f"último erro: {state.get('last_error')}")
     return 0 if state.get("status") == "complete" else 2
 
 
@@ -4569,7 +4569,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--base", default=str(Path.cwd()), help="pasta base para listar .srt e trabalhos")
     p_ui.set_defaults(func=serve_ui)
 
-    p_models = sub.add_parser("list-models", help="lista inference profiles uteis do Bedrock")
+    p_models = sub.add_parser("list-models", help="lista inference profiles úteis do Bedrock")
     p_models.add_argument("--profile", default=DEFAULT_PROFILE)
     p_models.add_argument("--region", default=DEFAULT_REGION)
     p_models.set_defaults(func=list_models)
@@ -4584,7 +4584,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_qc = sub.add_parser("qc", help="audita uma legenda traduzida")
     p_qc.add_argument("translated", help="arquivo .srt traduzido")
     p_qc.add_argument("--source", default=None, help="arquivo .srt original; se omitido, tenta sidecar")
-    p_qc.add_argument("--output", default=None, help="salva relatorio JSON")
+    p_qc.add_argument("--output", default=None, help="salva relatório JSON")
     p_qc.add_argument("--max-lines", type=int, default=2)
     p_qc.add_argument("--max-line-length", type=int, default=42)
     p_qc.add_argument("--max-cps", type=float, default=17.0)
@@ -4608,13 +4608,13 @@ def add_common_job_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-retry-forever", action="store_true", help="marca erro em vez de retentar indefinidamente")
     parser.add_argument("--call-timeout", type=int, default=240)
     parser.add_argument("--no-context-pass", action="store_true")
-    parser.add_argument("--polish-pass", action="store_true", help="roda um segundo passe de revisao")
-    parser.add_argument("--no-retry-qc-issues", action="store_true", help="nao refaz automaticamente cues que falham no QC duro")
+    parser.add_argument("--polish-pass", action="store_true", help="roda um segundo passe de revisão")
+    parser.add_argument("--no-retry-qc-issues", action="store_true", help="não refaz automaticamente cues que falham no QC duro")
     parser.add_argument("--qc-repair-rounds", type=int, default=2)
     parser.add_argument("--max-lines", type=int, default=2)
     parser.add_argument("--max-line-length", type=int, default=42)
     parser.add_argument("--max-cps", type=float, default=17.0)
-    parser.add_argument("--max-cues", type=int, default=None, help="debug: traduz so os N primeiros cues")
+    parser.add_argument("--max-cues", type=int, default=None, help="debug: traduz só os N primeiros cues")
     parser.add_argument("--output", default=None)
     parser.add_argument("--job-root", default=None)
     parser.add_argument("--force-new", action="store_true")
