@@ -107,6 +107,38 @@ ENGLISH_STOPWORDS = {
     "want",
     "need",
 }
+MUSICAL_VOCABLES = {
+    "ah",
+    "ay",
+    "ba",
+    "bam",
+    "bang",
+    "be",
+    "big",
+    "cha",
+    "da",
+    "doo",
+    "flash",
+    "ha",
+    "hey",
+    "la",
+    "ma",
+    "me",
+    "mi",
+    "mo",
+    "mu",
+    "na",
+    "oh",
+    "ooh",
+    "pa",
+    "ra",
+    "ramalama",
+    "sha",
+    "ta",
+    "um",
+    "whoa",
+    "yeah",
+}
 COMMON_CAPITALIZED_WORDS = {
     "A",
     "An",
@@ -602,7 +634,11 @@ def cue_quality_issues(
     protected_tokens = protected_tokens or []
     status = (record or {}).get("status")
     text = normalize_subtitle_text(str((record or {}).get("text", "")))
-    if status != "ok":
+    if status in {None, "", "pending"}:
+        issues.append({"severity": "pending", "code": "pending", "message": "Traducao ainda pendente."})
+        if not text:
+            return issues
+    elif status != "ok":
         issues.append({"severity": "error", "code": "not_ok", "message": f"Status atual: {status or 'pending'}."})
         if not text:
             return issues
@@ -671,7 +707,7 @@ def build_quality_report(
             severities = {item["severity"] for item in issues}
             codes = {item.get("code") for item in issues}
             cue_status = (translations.get(str(cue.id)) or {}).get("status")
-            is_pending = codes == {"not_ok"} and cue_status in {None, "", "pending"}
+            is_pending = "pending" in codes and cue_status in {None, "", "pending"}
             if is_pending:
                 pending_cue_ids.add(cue.id)
             elif "error" in severities:
@@ -835,6 +871,20 @@ def looks_like_repeated_name_or_token(text: str) -> bool:
     return False
 
 
+def looks_like_musical_vocable_line(source: str) -> bool:
+    if "♪" not in source:
+        return False
+    words = re.findall(r"[a-z']{1,}", strip_tags(source).lower())
+    if not words or len(words) > 8:
+        return False
+    vocable_hits = sum(
+        1
+        for word in words
+        if word.strip("'") in MUSICAL_VOCABLES or len(word.strip("'")) <= 2
+    )
+    return vocable_hits / len(words) >= 0.5
+
+
 def looks_untranslated(source: str, translated: str) -> bool:
     source_plain = re.sub(r"<[^>]+>", "", source).strip()
     translated_plain = re.sub(r"<[^>]+>", "", translated).strip()
@@ -845,6 +895,10 @@ def looks_untranslated(source: str, translated: str) -> bool:
     src_words = re.findall(r"[a-z']{2,}", src)
     if src == out and looks_like_repeated_name_or_token(source_plain):
         return False
+    if src == out and looks_like_musical_vocable_line(source_plain):
+        return False
+    if src == out and len(src_words) >= 3 and any(word in ENGLISH_STOPWORDS for word in src_words):
+        return True
     if src == out and len(src_words) >= 4 and re.search(r"[a-z]{4,}", src):
         return True
     words = re.findall(r"[a-z']{2,}", out)
