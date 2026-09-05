@@ -53,6 +53,12 @@ DEFAULT_MODELS = [
 # heuristica de qualidade seja considerada errada e a traducao seja aceita.
 SOFT_CONSENSUS_MODELS = 2
 
+# Quanto a traducao pode ficar mais lenta de ler que a fonte antes de virar aviso.
+CPS_REGRESSION_RATIO = 1.15
+
+# Bump quando as regras de QC mudarem, para relatorios antigos serem recalculados.
+QUALITY_REPORT_VERSION = 2
+
 TIME_RE = re.compile(
     r"^\s*\d{1,2}:\d{2}:\d{2},\d{3}\s*-->\s*"
     r"\d{1,2}:\d{2}:\d{2},\d{3}(?:\s+.*)?$"
@@ -716,9 +722,33 @@ def cue_quality_issues(
     if long_lines:
         issues.append({"severity": "warning", "code": "long_line", "message": f"Linha acima de {max_line_length} caracteres.", "lengths": long_lines})
     try:
-        cps = len(visible_text(text)) / cue_duration_seconds(cue)
+        duration = cue_duration_seconds(cue)
+        cps = len(visible_text(text)) / duration
+        source_cps = len(visible_text(cue.text)) / duration
         if cps > max_cps:
-            issues.append({"severity": "warning", "code": "high_cps", "message": f"Velocidade de leitura acima de {max_cps:.1f} cps.", "cps": round(cps, 2)})
+            # Muitas legendas comerciais ja passam do limite na propria fonte. Cobrar o
+            # limite absoluto marcaria metade do filme e esconderia o que importa: se a
+            # traducao ficou mais lenta de ler do que o original.
+            if cps > source_cps * CPS_REGRESSION_RATIO:
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "code": "high_cps",
+                        "message": f"Velocidade de leitura acima de {max_cps:.1f} cps e pior que a fonte.",
+                        "cps": round(cps, 2),
+                        "source_cps": round(source_cps, 2),
+                    }
+                )
+            else:
+                issues.append(
+                    {
+                        "severity": "info",
+                        "code": "high_cps_inherited",
+                        "message": f"Acima de {max_cps:.1f} cps, mas a legenda original ja era assim.",
+                        "cps": round(cps, 2),
+                        "source_cps": round(source_cps, 2),
+                    }
+                )
     except Exception as exc:
         issues.append({"severity": "warning", "code": "duration_parse", "message": f"Nao consegui calcular CPS: {exc}"})
     return issues
@@ -774,6 +804,7 @@ def build_quality_report(
     ok = total - len(error_cue_ids) - len(pending_cue_ids)
     return {
         "created_at": utc_now(),
+        "report_version": QUALITY_REPORT_VERSION,
         "thresholds": {
             "max_lines": max_lines,
             "max_line_length": max_line_length,
@@ -2284,8 +2315,9 @@ def ensure_quality_report_current(
     quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quality = quality or {}
-    summary = quality.get("summary") if isinstance(quality, dict) else None
-    if isinstance(summary, dict) and "pending_cues" in summary:
+    # Relatorio gravado por uma versao anterior dos criterios e recalculado, senao a UI
+    # mostra numeros que nao batem com as regras atuais.
+    if isinstance(quality, dict) and quality.get("report_version") == QUALITY_REPORT_VERSION:
         return quality
     source = state.get("source_path")
     if not source or not Path(source).exists():
@@ -3363,6 +3395,27 @@ Freud.
         max_cps=17.0,
     )
     assert any(item["code"] == "looks_untranslated" for item in issues_plain)
+
+    # CPS e cobrado como regressao contra a fonte: legenda comercial ja costuma passar do
+    # limite, e marcar metade do filme esconderia o que a traducao de fato piorou.
+    slow_source = SrtCue(id=1, number="1", timing="00:00:00,000 --> 00:00:04,000", text="Hi.")
+    verbose = {"status": "ok", "text": "Uma frase muito comprida que ninguem consegue ler nesse tempo todo aqui."}
+    codes_regression = {
+        item["code"]: item["severity"]
+        for item in cue_quality_issues(slow_source, verbose, max_lines=2, max_line_length=200, max_cps=17.0)
+    }
+    assert codes_regression.get("high_cps") == "warning", codes_regression
+    fast_source = SrtCue(id=2, number="2", timing="00:00:00,000 --> 00:00:01,000", text="This line is already far too fast to read.")
+    matched = {"status": "ok", "text": "Essa linha ja era rapida demais na fonte."}
+    codes_inherited = {
+        item["code"]: item["severity"]
+        for item in cue_quality_issues(fast_source, matched, max_lines=2, max_line_length=200, max_cps=17.0)
+    }
+    assert codes_inherited.get("high_cps_inherited") == "info", codes_inherited
+    assert "high_cps" not in codes_inherited, codes_inherited
+    inherited_report = build_quality_report([fast_source], {"2": matched}, max_lines=2, max_line_length=200, max_cps=17.0)
+    assert inherited_report["summary"]["warning_cues"] == 0, inherited_report["summary"]
+    assert inherited_report["report_version"] == QUALITY_REPORT_VERSION
 
     print("self-test ok")
     return 0
