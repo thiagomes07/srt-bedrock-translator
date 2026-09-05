@@ -32,10 +32,11 @@ Traduzir legenda parece simples até você tentar num filme inteiro. O que quebr
 
 | O que acontece na prática | O que esta ferramenta faz |
 |---|---|
-| Traduzir linha a linha perde o contexto e o personagem muda de tratamento no meio | Traduz em blocos, cada um enxergando o bloco anterior já traduzido e o seguinte |
+| Traduzir linha a linha perde o contexto e o personagem muda de tratamento no meio | Traduz em blocos, cada um enxergando o bloco anterior já traduzido e o seguinte, e fechando numa pausa da cena em vez de no meio de um diálogo |
+| Inglês não marca gênero e português exige: a mesma personagem vira ora "Meritíssimo", ora "Meritíssima" | Um glossário com gênero por personagem acompanha todos os blocos, e o QC acusa quem usar a outra forma |
 | Nomes e apelidos mudam de tradução ao longo do filme | Gera um guia do filme no início e envia junto em todos os blocos |
 | O modelo se recusa a traduzir letra de música achando que é pedido de letra | Contrato de resposta obrigatório e detecção de recusa, com nova tentativa e troca de modelo |
-| A resposta vem cortada ou fora do formato | Validação antes de aceitar, com o motivo da recusa realimentado na tentativa seguinte |
+| A resposta vem cortada ou fora do formato | A tradução é pedida como ferramenta, então a API devolve estrutura já validada; o que ainda escapar é validado aqui, com o motivo da recusa realimentado na tentativa seguinte |
 | Cai a internet no bloco 60 de 87 | O progresso está em disco; retomar continua do 61 sem retraduzir nem cobrar de novo |
 | Sobra um trecho sem traduzir e você só descobre assistindo | Controle de qualidade local e o resultado estampado no nome do arquivo |
 | Refrão de música devia ficar igual, mas a validação acha que é erro | Dois modelos concordando no mesmo texto derrubam a suspeita, em vez de travar |
@@ -236,8 +237,20 @@ PRs adicionando provedores prontos são muito bem-vindos.
 ## Como a qualidade é garantida
 
 Cada bloco vai ao modelo com o bloco anterior já traduzido, o bloco seguinte como
-contexto, o guia do filme e um formato de resposta obrigatório. A resposta só é aceita
-depois de passar por validação.
+contexto, o guia do filme e o glossário de termos já decididos. A tradução é pedida
+através de uma **ferramenta** com schema, e não como JSON escrito em prosa: a API valida
+e devolve a estrutura pronta, o que elimina a classe de falha em que uma aspa dentro da
+fala quebrava o bloco inteiro. Modelos que não aceitam ferramenta caem para o contrato em
+texto automaticamente.
+
+A parte do prompt que não muda entre blocos — regras, guia do filme e glossário — vai
+num prefixo em cache, cobrado a cerca de um décimo nas chamadas seguintes. Num filme de
+duas horas isso é perto de um terço da entrada, e entrada é o que domina o custo aqui.
+
+**Gênero.** O guia registra o gênero de cada pessoa e de cada forma de tratamento, porque
+o inglês não marca e o português obriga a escolher. Sem isso a mesma personagem muda de
+gênero ao longo do filme, e nenhuma checagem estrutural percebe. O glossário viaja em
+todos os blocos e o QC acusa qualquer cue que use a outra forma de um termo já fixado.
 
 O controle de qualidade separa dois níveis:
 
