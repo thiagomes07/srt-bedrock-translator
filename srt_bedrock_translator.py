@@ -1537,7 +1537,7 @@ class TranslatorJob:
         return output_path
 
     def cleanup_superseded_outputs(self, state: dict[str, Any], keep: Path) -> None:
-        """Remove a saida parcial e a variante final antiga deste mesmo job.
+        """Remove a saída parcial e a variante final antiga deste mesmo job.
 
         Sem isso a pasta do filme acumula .EM_ANDAMENTO.srt, .INCOMPLETO.srt e
         .OK.srt lado a lado e não da para saber qual e a legenda boa.
@@ -1556,7 +1556,7 @@ class TranslatorJob:
             if owner != self.job_id:
                 self.logger.event(
                     "WARN",
-                    "Arquivo antigo com nome de saida não pertence a este trabalho; mantendo.",
+                    "Arquivo antigo com nome de saída não pertence a este trabalho; mantendo.",
                     error=str(path),
                 )
                 continue
@@ -1564,8 +1564,8 @@ class TranslatorJob:
                 try:
                     target.unlink()
                 except OSError as exc:
-                    self.logger.event("WARN", "Não consegui remover saida antiga.", error=f"{target}: {exc}")
-            self.logger.event("INFO", "Saida antiga removida para não confundir com a legenda final.", error=str(path))
+                    self.logger.event("WARN", "Não consegui remover saída antiga.", error=f"{target}: {exc}")
+            self.logger.event("INFO", "Saída antiga removida para não confundir com a legenda final.", error=str(path))
 
     def try_write_output(self, state: dict[str, Any], final: bool = False) -> Path | None:
         try:
@@ -1682,7 +1682,7 @@ class TranslatorJob:
                 state["context"] = context
                 self.save_state(state)
                 return
-            self.logger.event("WARN", "Contexto existente não passou na validação; vou recria-lo.", error="contexto ausente, genérico ou truncado")
+            self.logger.event("WARN", "Contexto existente não passou na validação; vou recriá-lo.", error="contexto ausente, genérico ou truncado")
         assert self.doc is not None
         self.logger.event("INFO", "Criando contexto do filme a partir do nome e de amostras da legenda.")
         system = (
@@ -4548,7 +4548,7 @@ def translate_cli(args: argparse.Namespace) -> int:
         return 1
     print("\nResultado:")
     print(f"status: {state.get('status')}")
-    print(f"saida: {state.get('final_output_path') or state.get('last_written_output')}")
+    print(f"saída: {state.get('final_output_path') or state.get('last_written_output')}")
     if state.get("last_error"):
         print(f"último erro: {state.get('last_error')}")
     return 0 if state.get("status") == "complete" else 2
@@ -4559,7 +4559,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd")
 
     p_translate = sub.add_parser("translate", help="traduz um arquivo .srt")
-    p_translate.add_argument("input", help="arquivo .srt de entrada ou saida incompleta com sidecar")
+    p_translate.add_argument("input", help="arquivo .srt de entrada ou saída incompleta com sidecar")
     add_common_job_args(p_translate)
     p_translate.set_defaults(func=translate_cli)
 
