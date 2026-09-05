@@ -49,6 +49,10 @@ DEFAULT_MODELS = [
     "meta.llama3-70b-instruct-v1:0",
 ]
 
+# Quantos modelos distintos precisam concordar no mesmo texto suspeito para que a
+# heuristica de qualidade seja considerada errada e a traducao seja aceita.
+SOFT_CONSENSUS_MODELS = 2
+
 TIME_RE = re.compile(
     r"^\s*\d{1,2}:\d{2}:\d{2},\d{3}\s*-->\s*"
     r"\d{1,2}:\d{2}:\d{2},\d{3}(?:\s+.*)?$"
@@ -109,7 +113,10 @@ ENGLISH_STOPWORDS = {
 }
 MUSICAL_VOCABLES = {
     "ah",
+    "awo",
+    "awoo",
     "ay",
+    "ayee",
     "ba",
     "bam",
     "bang",
@@ -119,8 +126,12 @@ MUSICAL_VOCABLES = {
     "da",
     "doo",
     "flash",
+    "guli",
     "ha",
     "hey",
+    "hi",
+    "kie",
+    "kye",
     "la",
     "ma",
     "me",
@@ -133,10 +144,14 @@ MUSICAL_VOCABLES = {
     "pa",
     "ra",
     "ramalama",
+    "sam",
     "sha",
     "ta",
     "um",
     "whoa",
+    "yi",
+    "yippie",
+    "yay",
     "yeah",
 }
 COMMON_CAPITALIZED_WORDS = {
@@ -370,7 +385,25 @@ class JobStopped(Exception):
 
 
 class ContractError(Exception):
-    pass
+    """Resposta fora do contrato.
+
+    `soft=True` marca falhas que vem de heuristica de qualidade (ex.: "parece nao
+    traduzido"), nao de quebra estrutural. Heuristica pode errar; por isso um erro
+    soft nunca pode travar o lote para sempre. Ver `SoftContractError`.
+    """
+
+    def __init__(self, message: str, *, soft: bool = False, cue_ids: list[int] | None = None):
+        super().__init__(message)
+        self.soft = soft
+        self.cue_ids = cue_ids or []
+
+
+class SoftContractError(ContractError):
+    """Falha apenas heuristica: o payload e estruturalmente valido e utilizavel."""
+
+    def __init__(self, message: str, *, cue_ids: list[int] | None = None, payload: dict[str, str] | None = None):
+        super().__init__(message, soft=True, cue_ids=cue_ids)
+        self.payload = payload or {}
 
 
 class BedrockCallError(Exception):
@@ -649,7 +682,19 @@ def cue_quality_issues(
     if text_has_refusal(text):
         issues.append({"severity": "error", "code": "refusal", "message": "Texto parece recusa do modelo."})
     if looks_untranslated(cue.text, text):
-        issues.append({"severity": "error", "code": "looks_untranslated", "message": "Texto parece nao traduzido."})
+        # Se modelos independentes ja devolveram este mesmo texto, a heuristica perde a
+        # ultima palavra: vira aviso para revisao, nao erro que bloqueia o .OK.srt.
+        if (record or {}).get("review_flag") == "consenso_heuristica":
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": "untranslated_consensus",
+                    "message": "Texto identico a fonte, aceito por consenso entre modelos; confira manualmente.",
+                    "models": (record or {}).get("review_models", []),
+                }
+            )
+        else:
+            issues.append({"severity": "error", "code": "looks_untranslated", "message": "Texto parece nao traduzido."})
     missing_tokens = [token for token in protected_tokens if token not in text]
     if missing_tokens:
         issues.append({"severity": "error", "code": "protected_token_missing", "message": "Token protegido ausente.", "tokens": missing_tokens})
@@ -1013,6 +1058,15 @@ def validate_translation_payload(
     missing = sorted(expected_ids - set(got))
     if missing:
         raise ContractError(f"IDs faltando: {missing[:12]}.")
+    protected_tokens_by_id = protected_tokens_by_id or {}
+    for cue_id, tokens in protected_tokens_by_id.items():
+        translated = got.get(cue_id, "")
+        missing_tokens = [token for token in tokens if token and token not in translated]
+        if missing_tokens:
+            raise ContractError(f"Tokens protegidos ausentes no id {cue_id}: {missing_tokens}.")
+    normalized = {str(k): v for k, v in got.items()}
+    # Checagem heuristica por ultimo: o payload ja esta estruturalmente correto aqui,
+    # entao a falha vira soft e carrega o payload para permitir aceitacao por consenso.
     cue_by_id = {cue.id: cue for cue in batch.cues}
     suspicious = [
         cue_id
@@ -1020,14 +1074,12 @@ def validate_translation_payload(
         if looks_untranslated(cue_by_id[cue_id].text, text)
     ]
     if suspicious:
-        raise ContractError(f"Possivel texto nao traduzido nos IDs: {suspicious[:12]}.")
-    protected_tokens_by_id = protected_tokens_by_id or {}
-    for cue_id, tokens in protected_tokens_by_id.items():
-        translated = got.get(cue_id, "")
-        missing_tokens = [token for token in tokens if token and token not in translated]
-        if missing_tokens:
-            raise ContractError(f"Tokens protegidos ausentes no id {cue_id}: {missing_tokens}.")
-    return {str(k): v for k, v in got.items()}
+        raise SoftContractError(
+            f"Possivel texto nao traduzido nos IDs: {sorted(suspicious)[:12]}.",
+            cue_ids=sorted(suspicious),
+            payload=normalized,
+        )
+    return normalized
 
 
 class BedrockClient:
@@ -1447,7 +1499,7 @@ class TranslatorJob:
             "subtitle_samples": samples,
         }
         try:
-            text, meta, model = self.call_with_fallback(
+            text, meta, model, _outcome = self.call_with_fallback(
                 client,
                 state,
                 system,
@@ -1514,12 +1566,13 @@ class TranslatorJob:
                 total=len(self.doc.cues),
             )
             try:
-                translations, model = self.translate_batch(client, state, batch, polish=polish)
+                translations, model, outcome = self.translate_batch(client, state, batch, polish=polish)
                 now = utc_now()
+                soft_ids = {str(cue_id) for cue_id in (outcome.get("soft_cue_ids") or [])}
                 for cue_id, text in translations.items():
                     prior = self.translations.get(cue_id, {})
                     text = apply_subtitle_formatting(text, self.config.max_line_length, self.config.max_lines)
-                    self.translations[cue_id] = {
+                    record = {
                         **prior,
                         "text": text,
                         "status": "ok",
@@ -1528,6 +1581,20 @@ class TranslatorJob:
                         "polished": bool(polish) or bool(prior.get("polished")),
                         "updated_at": now,
                     }
+                    if cue_id in soft_ids:
+                        # Aceito por consenso entre modelos: nao e erro duro, mas fica
+                        # sinalizado para o relatorio de QC e para revisao humana.
+                        record["review_flag"] = "consenso_heuristica"
+                        record["review_reason"] = str(outcome.get("reason", ""))[:400]
+                        record["review_models"] = outcome.get("models_agreeing") or []
+                    else:
+                        record.pop("review_flag", None)
+                        record.pop("review_reason", None)
+                        record.pop("review_models", None)
+                    self.translations[cue_id] = record
+                if soft_ids:
+                    flagged = set(state.get("review_cue_ids", [])) | {int(cue_id) for cue_id in soft_ids}
+                    state["review_cue_ids"] = sorted(flagged)
                 self.save_translations()
                 if not polish:
                     completed.add(batch.number)
@@ -1637,14 +1704,12 @@ class TranslatorJob:
                 "updated_at": now,
             }
 
-    def translate_batch(self, client: BedrockClient, state: dict[str, Any], batch: Batch, *, polish: bool) -> tuple[dict[str, str], str]:
-        if polish:
-            system, prompt = build_polish_prompt(self, batch)
-        else:
-            system, prompt = build_translation_prompt(self, batch)
+    def translate_batch(self, client: BedrockClient, state: dict[str, Any], batch: Batch, *, polish: bool) -> tuple[dict[str, str], str, dict[str, Any]]:
+        builder = build_polish_prompt if polish else build_translation_prompt
+        system, prompt = builder(self, batch)
         protected = protected_tokens_for_batch(self, batch)
         max_tokens = estimate_max_tokens(batch, polish=polish)
-        text, meta, model = self.call_with_fallback(
+        text, meta, model, outcome = self.call_with_fallback(
             client,
             state,
             system,
@@ -1654,11 +1719,14 @@ class TranslatorJob:
             stage="polish" if polish else "translate",
             batch=batch.number,
             validator=lambda raw: validate_translation_payload(extract_json_object(raw), batch, protected),
+            prompt_builder=lambda feedback: builder(self, batch, feedback=feedback),
         )
         self.add_usage(state, meta)
+        if outcome.get("soft_accepted") and outcome.get("payload"):
+            return dict(outcome["payload"]), model, outcome
         payload = extract_json_object(text)
         translations = validate_translation_payload(payload, batch, protected)
-        return translations, model
+        return translations, model, outcome
 
     def call_with_fallback(
         self,
@@ -1673,12 +1741,18 @@ class TranslatorJob:
         batch: int | None = None,
         validator: Any | None = None,
         max_cycles: int | None = None,
-    ) -> tuple[str, dict[str, Any], str]:
+        prompt_builder: Any | None = None,
+    ) -> tuple[str, dict[str, Any], str, dict[str, Any]]:
         cycle = 0
         last_error = ""
+        feedback = ""
         current_max_tokens = max_tokens
+        outcome: dict[str, Any] = {"soft_accepted": False, "soft_cue_ids": [], "payload": None, "reason": ""}
+        soft_records: list[dict[str, Any]] = []
+        hard_failures = 0
         while True:
             cycle += 1
+            cycle_soft_only = True
             for model in self.config.models:
                 if model in self.unavailable_models:
                     continue
@@ -1693,6 +1767,7 @@ class TranslatorJob:
                         "model": model,
                         "attempt": attempt,
                         "cycle": cycle,
+                        "soft_failures": len(soft_records),
                     }
                     self.save_state(state)
                     self.logger.event(
@@ -1702,12 +1777,21 @@ class TranslatorJob:
                         model=model,
                         attempt=attempt,
                         max_tokens=current_max_tokens,
+                        retry_feedback=bool(feedback),
                     )
+                    # Reenviar o prompt identico depois de uma falha faz o modelo repetir
+                    # a mesma resposta. Cada retry carrega o motivo da recusa anterior.
+                    call_system, call_prompt = system, prompt
+                    if feedback and prompt_builder is not None:
+                        try:
+                            call_system, call_prompt = prompt_builder(feedback)
+                        except Exception:
+                            call_system, call_prompt = system, prompt
                     try:
                         raw, meta = client.converse(
                             model,
-                            system,
-                            prompt,
+                            call_system,
+                            call_prompt,
                             max_tokens=current_max_tokens,
                             temperature=temperature,
                         )
@@ -1719,9 +1803,12 @@ class TranslatorJob:
                         elif text_has_refusal(raw):
                             raise ContractError("Resposta parece recusa, nao traducao no contrato.")
                         self.logger.event("INFO", "Resposta validada.", batch=batch, model=model, attempt=attempt)
-                        return raw, meta, model
+                        return raw, meta, model, outcome
                     except BedrockCallError as exc:
                         last_error = str(exc)
+                        feedback = ""
+                        hard_failures += 1
+                        cycle_soft_only = False
                         state["last_error"] = last_error
                         self.save_state(state)
                         if exc.unavailable_model:
@@ -1733,21 +1820,89 @@ class TranslatorJob:
                             break
                     except (ContractError, json.JSONDecodeError) as exc:
                         last_error = str(exc)
+                        is_soft = isinstance(exc, ContractError) and exc.soft
                         state["last_error"] = last_error
                         self.save_state(state)
+                        if is_soft:
+                            soft_records.append(
+                                {
+                                    "model": model,
+                                    "cue_ids": tuple(getattr(exc, "cue_ids", []) or []),
+                                    "payload": getattr(exc, "payload", None),
+                                    "raw": raw_excerpt,
+                                    "meta": locals().get("meta") or {},
+                                    "reason": last_error,
+                                }
+                            )
+                            feedback = (
+                                f"A resposta anterior foi recusada pela validacao automatica: {last_error} "
+                                "Traduza ou adapte esses IDs para portugues brasileiro de verdade. "
+                                "Se e somente se o texto for vocalizacao musical sem sentido lexical "
+                                "(refrao de silabas, onomatopeia, scat), repita exatamente o mesmo texto: "
+                                "isso e aceito e nao e considerado erro."
+                            )
+                        else:
+                            hard_failures += 1
+                            cycle_soft_only = False
+                            feedback = f"A resposta anterior foi recusada: {last_error} Corrija e devolva o contrato JSON exato."
                         self.logger.event(
                             "WARN",
-                            "Resposta fora do contrato; vou retentar.",
+                            "Resposta fora do contrato; vou retentar." if not is_soft else "Heuristica de qualidade recusou a resposta; vou retentar com feedback.",
                             batch=batch,
                             model=model,
                             attempt=attempt,
+                            soft=is_soft,
                             error=(last_error + (f" | resposta={raw_excerpt}" if raw_excerpt else ""))[:1200],
                         )
                         if "max_tokens" in last_error:
                             current_max_tokens = min(12000, max(current_max_tokens + 1000, int(current_max_tokens * 1.5)))
+                        accepted = self.soft_consensus_record(soft_records)
+                        if accepted is not None:
+                            models_agreeing = sorted({rec["model"] for rec in soft_records if rec["cue_ids"] == accepted["cue_ids"]})
+                            outcome.update(
+                                {
+                                    "soft_accepted": True,
+                                    "soft_cue_ids": list(accepted["cue_ids"]),
+                                    "payload": accepted["payload"],
+                                    "reason": accepted["reason"],
+                                    "models_agreeing": models_agreeing,
+                                }
+                            )
+                            self.logger.event(
+                                "WARN",
+                                "Modelos independentes devolveram o mesmo texto nesses IDs; aceitando por consenso "
+                                "e marcando para revisao em vez de travar o lote.",
+                                batch=batch,
+                                cue_ids=list(accepted["cue_ids"])[:20],
+                                models=models_agreeing,
+                                error=accepted["reason"][:400],
+                            )
+                            return accepted.get("raw", ""), accepted.get("meta") or {}, accepted["model"], outcome
                     sleep = min(self.config.max_backoff, self.config.base_backoff * (2 ** (attempt - 1)))
                     sleep = sleep + random.uniform(0, min(2.0, sleep * 0.2))
                     self.sleep_or_stop(sleep)
+            if cycle_soft_only and soft_records:
+                # Um ciclo inteiro de modelos so falhou na heuristica: o payload e valido,
+                # entao seguir tentando so queima tokens. Aceita e marca para revisao.
+                accepted = soft_records[-1]
+                outcome.update(
+                    {
+                        "soft_accepted": True,
+                        "soft_cue_ids": list(accepted["cue_ids"]),
+                        "payload": accepted["payload"],
+                        "reason": accepted["reason"],
+                        "models_agreeing": sorted({rec["model"] for rec in soft_records}),
+                    }
+                )
+                self.logger.event(
+                    "WARN",
+                    "Ciclo completo de modelos falhou apenas na heuristica de qualidade; "
+                    "aceitando a traducao e marcando os IDs para revisao.",
+                    batch=batch,
+                    cue_ids=list(accepted["cue_ids"])[:20],
+                    error=accepted["reason"][:400],
+                )
+                return accepted.get("raw", ""), accepted.get("meta") or {}, accepted["model"], outcome
             if len(self.unavailable_models) >= len(self.config.models):
                 raise RuntimeError(
                     "Todos os modelos configurados ficaram indisponiveis para esta conta/regiao. "
@@ -1766,6 +1921,25 @@ class TranslatorJob:
                 self.sleep_or_stop(sleep)
                 continue
             raise RuntimeError(f"Falha apos tentar todos os modelos. Ultimo erro: {last_error}")
+
+    @staticmethod
+    def soft_consensus_record(soft_records: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Aceita quando modelos independentes concordam no mesmo texto suspeito.
+
+        Se dois provedores diferentes devolvem exatamente os mesmos IDs marcados pela
+        heuristica, a evidencia aponta para a heuristica errada, nao para o modelo.
+        """
+        by_ids: dict[tuple, set[str]] = {}
+        for rec in soft_records:
+            if not rec.get("payload"):
+                continue
+            by_ids.setdefault(rec["cue_ids"], set()).add(str(rec["model"]))
+        for ids, models in by_ids.items():
+            if len(models) >= SOFT_CONSENSUS_MODELS:
+                for rec in reversed(soft_records):
+                    if rec["cue_ids"] == ids and rec.get("payload"):
+                        return rec
+        return None
 
     def sleep_or_stop(self, seconds: float) -> None:
         end = time.time() + seconds
@@ -1829,7 +2003,7 @@ def adjacent_batches(job: TranslatorJob, batch: Batch) -> tuple[list[dict[str, A
     return prev_items, next_items
 
 
-def build_translation_prompt(job: TranslatorJob, batch: Batch) -> tuple[str, str]:
+def build_translation_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "") -> tuple[str, str]:
     context = load_json(job.context_path, {})
     prev_items, next_items = adjacent_batches(job, batch)
     protected = protected_tokens_for_batch(job, batch)
@@ -1867,10 +2041,12 @@ def build_translation_prompt(job: TranslatorJob, batch: Batch) -> tuple[str, str
         "current_batch_translate_this": [cue.as_prompt_item(include_time=True) for cue in batch.cues],
         "next_context_source_only": next_items,
     }
+    if feedback:
+        payload["retry_feedback_fix_this_first"] = feedback
     return system, prompt_json(payload)
 
 
-def build_polish_prompt(job: TranslatorJob, batch: Batch) -> tuple[str, str]:
+def build_polish_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "") -> tuple[str, str]:
     context = load_json(job.context_path, {})
     prev_items, next_items = adjacent_batches(job, batch)
     protected = protected_tokens_for_batch(job, batch)
@@ -1907,6 +2083,8 @@ def build_polish_prompt(job: TranslatorJob, batch: Batch) -> tuple[str, str]:
         "current_batch_review_this": current,
         "next_context_source_only": next_items,
     }
+    if feedback:
+        payload["retry_feedback_fix_this_first"] = feedback
     return system, prompt_json(payload)
 
 
@@ -2050,6 +2228,12 @@ def compact_state(state: dict[str, Any]) -> dict[str, Any]:
         "current": current,
         "usage": state.get("usage", {}),
         "quality": quality_summary,
+        "review_cues": len(state.get("review_cue_ids", [])),
+        "stuck_batch": bool(
+            stored_status == "running"
+            and is_alive
+            and (int(current.get("cycle") or 0) >= 2 or int(current.get("soft_failures") or 0) >= 3)
+        ),
     }
 
 
@@ -2122,6 +2306,22 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
         state["error_cues"] = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "error")
         state["pending_cues"] = max(0, int(state.get("total_cues") or 0) - int(state.get("done_cues") or 0))
         state["warning_cues"] = 0
+    review_ids = sorted(
+        {
+            int(cue_id)
+            for cue_id, rec in translations.items()
+            if isinstance(rec, dict) and rec.get("review_flag")
+        }
+        | {int(cue_id) for cue_id in state.get("review_cue_ids", [])}
+    )
+    state["review_cue_ids"] = review_ids
+    state["review_cues"] = len(review_ids)
+    current = state.get("current") or {}
+    state["stuck_batch"] = bool(
+        stored_status == "running"
+        and is_alive
+        and (int(current.get("cycle") or 0) >= 2 or int(current.get("soft_failures") or 0) >= 3)
+    )
     state["log_tail"] = JsonLogger(job_dir, echo=False).tail(240)
     state["preview"] = preview_current(job_dir, state, translations)
     return state
@@ -2695,6 +2895,7 @@ UI_HTML = r"""<!doctype html>
         <div class="metric"><div class="value" id="mBatch">-</div><div class="label">lote</div></div>
         <div class="metric"><div class="value" id="mModel">-</div><div class="label">modelo atual</div></div>
         <div class="metric"><div class="value" id="mErrors">0</div><div class="label">erros QC</div></div>
+        <div class="metric"><div class="value" id="mReview">0</div><div class="label">revisar</div></div>
       </div>
       <div class="bar"><div id="barFill"></div></div>
       <div class="panel-body">
@@ -2844,8 +3045,9 @@ UI_HTML = r"""<!doctype html>
       document.querySelector("#mBatch").textContent = cur.batch ? `${cur.batch}/${job.total_batches || "?"}` : "-";
       document.querySelector("#mModel").textContent = cur.model ? shortModel(cur.model) : "-";
       document.querySelector("#mErrors").textContent = job.error_cues || 0;
+      document.querySelector("#mReview").textContent = job.review_cues || 0;
       const pill = document.querySelector("#statusPill");
-      pill.textContent = job.status || "-";
+      pill.textContent = job.stuck_batch ? `${job.status || "-"} · lote insistindo` : (job.status || "-");
       pill.className = "pill " + (job.status || "");
       const q = job.quality || {};
       document.querySelector("#paths").textContent = `Fonte: ${job.source_path || "-"} | Saida: ${job.final_output_path || job.last_written_output || "-"} | Pendentes: ${job.pending_cues || q.pending_cues || 0} | QC avisos: ${job.warning_cues || q.warning_cues || 0} | Relatorio: ${job.quality_report_path || "-"}`;
@@ -3060,6 +3262,10 @@ Hello.
         raise AssertionError("music marker validation failed")
     except ContractError:
         pass
+    assert not looks_untranslated("♪ Guli guli guli guli ram sam sam ♪", "♪ Guli guli guli guli ram sam sam ♪")
+    assert not looks_untranslated("♪ Hi kye yay, yippie yi kye yay ♪", "♪ Hi kye yay, yippie yi kye yay ♪")
+    assert not looks_untranslated("♪ Awoo awoo ayee kie chi' ♪", "♪ Awoo awoo ayee kie chi' ♪")
+    assert looks_untranslated("♪ I love you baby ♪", "♪ I love you baby ♪")
     typo_doc = parse_srt("""1
 00:00:01,000 --> 00:00:02,000
 Sigmund "Frued."
@@ -3077,6 +3283,48 @@ Freud.
         max_cps=17.0,
     )
     assert report["summary"]["error_cues"] == 0
+
+    # Falha de heuristica precisa ser soft e carregar o payload, para que o lote possa
+    # ser aceito por consenso em vez de retentar para sempre.
+    vocable_cues = [
+        SrtCue(id=1, number=1, timing="00:00:01,000 --> 00:00:03,000", text="Hello there, my friend."),
+        SrtCue(id=2, number=2, timing="00:00:03,000 --> 00:00:09,000", text="♪ Zoop bidoo wappa dinga ♪"),
+    ]
+    vocable_batch = Batch(number=1, cues=vocable_cues, start_id=1, end_id=2)
+    try:
+        validate_translation_payload(
+            {"translations": [{"id": 1, "text": "Olá, meu amigo."}, {"id": 2, "text": "♪ Zoop bidoo wappa dinga ♪"}]},
+            vocable_batch,
+        )
+        raise AssertionError("heuristica deveria ter recusado")
+    except SoftContractError as exc:
+        assert exc.soft and exc.cue_ids == [2] and exc.payload["1"] == "Olá, meu amigo."
+    try:
+        validate_translation_payload({"translations": [{"id": 1, "text": "Olá."}]}, vocable_batch)
+        raise AssertionError("IDs faltando deveria ter recusado")
+    except ContractError as exc:
+        assert not exc.soft, "quebra estrutural nao pode virar soft"
+
+    # Consenso exige modelos distintos concordando nos mesmos IDs.
+    rec_a = {"model": "modelo-a", "cue_ids": (2,), "payload": {"2": "x"}, "reason": "r", "raw": "", "meta": {}}
+    rec_b = {"model": "modelo-b", "cue_ids": (2,), "payload": {"2": "y"}, "reason": "r", "raw": "", "meta": {}}
+    assert TranslatorJob.soft_consensus_record([rec_a, rec_b]) is not None
+    assert TranslatorJob.soft_consensus_record([rec_a, dict(rec_a)]) is None
+    assert TranslatorJob.soft_consensus_record([rec_a, {**rec_b, "cue_ids": (3,)}]) is None
+
+    # Aceito por consenso vira aviso no QC, nao erro duro.
+    flagged = {"status": "ok", "text": "♪ Zoop bidoo wappa dinga ♪", "review_flag": "consenso_heuristica"}
+    issues_flagged = cue_quality_issues(vocable_cues[1], flagged, max_lines=2, max_line_length=42, max_cps=17.0)
+    assert not any(item["severity"] == "error" for item in issues_flagged)
+    issues_plain = cue_quality_issues(
+        vocable_cues[1],
+        {"status": "ok", "text": "♪ Zoop bidoo wappa dinga ♪"},
+        max_lines=2,
+        max_line_length=42,
+        max_cps=17.0,
+    )
+    assert any(item["code"] == "looks_untranslated" for item in issues_plain)
+
     print("self-test ok")
     return 0
 
