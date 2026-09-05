@@ -89,7 +89,7 @@ SOFT_CONSENSUS_MODELS = 2
 CPS_REGRESSION_RATIO = 1.35
 
 # Bump quando as regras de QC mudarem, para relatórios antigos serem recalculados.
-QUALITY_REPORT_VERSION = 3
+QUALITY_REPORT_VERSION = 4
 
 TIME_RE = re.compile(
     r"^\s*\d{1,2}:\d{2}:\d{2},\d{3}\s*-->\s*"
@@ -825,8 +825,14 @@ def build_quality_report(
     max_line_length: int,
     max_cps: float,
     protected_tokens_by_id: dict[int, list[str]] | None = None,
+    glossary: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     protected_tokens_by_id = protected_tokens_by_id or {}
+    conflitos = glossary_conflicts(cues, translations, glossary or {}) if glossary else {}
+    cues_em_conflito: dict[int, list[dict[str, Any]]] = {}
+    for origem, dados in conflitos.items():
+        for cue_id in dados["cues"]:
+            cues_em_conflito.setdefault(cue_id, []).append({"termo": origem, "esperado": dados["esperado"]})
     cue_reports = []
     counts = {"error": 0, "warning": 0}
     error_cue_ids: set[int] = set()
@@ -841,6 +847,18 @@ def build_quality_report(
             max_cps=max_cps,
             protected_tokens=protected_tokens_by_id.get(cue.id, []),
         )
+        for conflito in cues_em_conflito.get(cue.id, []):
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": "glossary_gender",
+                    "message": (
+                        f"O termo {conflito['termo']} foi fixado como {conflito['esperado']}, "
+                        "mas aqui apareceu na outra forma de gênero."
+                    ),
+                    "esperado": conflito["esperado"],
+                }
+            )
         if issues:
             severities = {item["severity"] for item in issues}
             codes = {item.get("code") for item in issues}
@@ -1032,6 +1050,77 @@ def validate_context_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload.get("continuity_notes"), list):
         raise ContractError("Contexto continuity_notes inválido.")
     return payload
+
+
+def glossary_from_context(context: Any) -> list[dict[str, str]]:
+    """Termos com traducao fixada e genero, extraidos do guia do filme."""
+    entradas = []
+    if not isinstance(context, dict):
+        return entradas
+    for item in context.get("names_and_terms") or []:
+        if not isinstance(item, dict):
+            continue
+        origem = str(item.get("source", "")).strip()
+        destino = str(item.get("ptbr", "")).strip()
+        if not origem or not destino:
+            continue
+        genero = str(item.get("gender", "n")).strip().lower()[:1]
+        entradas.append(
+            {
+                "source": origem,
+                "ptbr": destino,
+                "gender": genero if genero in {"f", "m", "n"} else "n",
+                "note": str(item.get("note", ""))[:160],
+            }
+        )
+    return entradas[:40]
+
+
+def gender_variants(term: str) -> list[str]:
+    """Formas do mesmo termo que diferem so na desinencia de genero.
+
+    Serve para pegar o caso em que a mesma personagem recebe Meritissimo num
+    trecho e Meritissima em outro: sao a mesma palavra, generos diferentes.
+    """
+    saida = []
+    for de, para in (("o", "a"), ("a", "o")):
+        if term.endswith(de) and len(term) > 3:
+            saida.append(term[:-1] + para)
+    return saida
+
+
+def glossary_conflicts(
+    cues: list[SrtCue],
+    translations: dict[str, dict[str, Any]],
+    glossary: list[dict[str, str]],
+) -> dict[str, dict[str, Any]]:
+    """Onde o filme usou a variante de genero errada de um termo ja decidido."""
+    achados: dict[str, dict[str, Any]] = {}
+    for entrada in glossary:
+        esperado = entrada["ptbr"]
+        variantes = gender_variants(esperado)
+        if not variantes:
+            continue
+        origem_re = re.compile(r"\b" + re.escape(entrada["source"]) + r"\b", re.IGNORECASE)
+        certos, errados = 0, []
+        for cue in cues:
+            rec = translations.get(str(cue.id))
+            if not isinstance(rec, dict) or rec.get("status") != "ok":
+                continue
+            texto = str(rec.get("text", ""))
+            if not origem_re.search(cue.text):
+                continue
+            if re.search(r"\b" + re.escape(esperado) + r"\b", texto, re.IGNORECASE):
+                certos += 1
+            elif any(re.search(r"\b" + re.escape(v) + r"\b", texto, re.IGNORECASE) for v in variantes):
+                errados.append(cue.id)
+        if errados:
+            achados[entrada["source"]] = {
+                "esperado": esperado,
+                "cues": errados,
+                "certos": certos,
+            }
+    return achados
 
 
 def context_is_usable(context: Any) -> bool:
@@ -1654,6 +1743,7 @@ class TranslatorJob:
             max_line_length=self.config.max_line_length,
             max_cps=self.config.max_cps,
             protected_tokens_by_id=self.protected_tokens_for_all_cues(),
+            glossary=glossary_from_context(load_json(self.context_path, {})),
         )
         path = self.job_dir / "quality_report.json"
         atomic_write_json(path, report)
@@ -1762,6 +1852,9 @@ class TranslatorJob:
             "rules": [
                 "Não invente sinopse externa.",
                 "Identifique nomes recorrentes, relacoes aparentes, tom, registro e escolhas de tratamento apenas quando a amostra permitir.",
+                "Para CADA pessoa em names_and_terms preencha gender com f, m ou n. Portugues exige concordancia que o ingles nao marca: sem isso a mesma personagem vira ora masculina ora feminina ao longo do filme.",
+                "Inclua tambem as formas de tratamento recorrentes como termo: Your Honor, Counselor, sir, ma'am, Doctor. Fixe a versao pt-BR e o genero de quem recebe o tratamento.",
+                "Se a amostra nao permitir deduzir o genero, use n; nao invente.",
                 "Inclua no máximo 8 orientacoes praticas para músicas legendadas, palavroes, humor, ironia e continuidade.",
                 "Use strings curtas. Limite names_and_terms a 20 itens e continuity_notes a 10 itens.",
                 "Se houver dúvida, prefira diretrizes conservadoras.",
@@ -1769,7 +1862,7 @@ class TranslatorJob:
             "response_format_required": (
                 '{"title_guess":"...","year_guess":"...","source_language":"...",'
                 '"tone":"...","style_guide_ptbr":["..."],'
-                '"names_and_terms":[{"source":"...","ptbr":"...","note":"..."}],'
+                '"names_and_terms":[{"source":"...","ptbr":"...","gender":"f|m|n","note":"..."}],'
                 '"continuity_notes":["..."]}'
             ),
             "subtitle_samples": samples,
@@ -2355,9 +2448,12 @@ def build_translation_prompt(job: TranslatorJob, batch: Batch, *, feedback: str 
             "Se houver idioma em colchetes, use forma natural em pt-BR: [speaks French] -> [fala frances].",
             "Se houver tags HTML simples, preserve as tags ao redor do texto equivalente.",
             "Tokens listados em protected_tokens_by_id devem ser copiados exatamente; eles podem ser nomes, grafias intencionais ou piadas.",
+            "glossario_decidido_use_exatamente fixa a traducao e o genero de cada termo. Use a forma exata listada, inclusive a desinencia de genero, mesmo que o ingles nao marque genero. Uma personagem tratada por Meritissima em um trecho nao pode virar Meritissimo em outro.",
+            "Concordancia de genero: o portugues exige o que o ingles omite. Quem fala define obrigado ou obrigada; quem e descrito define cansado ou cansada. Use o gender do glossario e o contexto anterior para decidir, e mantenha a escolha estavel.",
             "Não resuma, não censure, não explique.",
         ],
         "protected_tokens_by_id": protected,
+        "glossario_decidido_use_exatamente": glossary_from_context(context),
         "previous_context_source_and_ptbr": prev_items,
         "current_batch_translate_this": [cue.as_prompt_item(include_time=True) for cue in batch.cues],
         "next_context_source_only": next_items,
@@ -2400,6 +2496,7 @@ def build_polish_prompt(job: TranslatorJob, batch: Batch, *, feedback: str = "")
             "Retorne exatamente os IDs do lote atual.",
         ],
         "protected_tokens_by_id": protected,
+        "glossario_decidido_use_exatamente": glossary_from_context(context),
         "previous_context_source_and_ptbr": prev_items,
         "current_batch_review_this": current,
         "next_context_source_only": next_items,
@@ -4642,6 +4739,50 @@ Freud.
     inherited_report = build_quality_report([fast_source], {"2": matched}, max_lines=2, max_line_length=200, max_cps=17.0)
     assert inherited_report["summary"]["warning_cues"] == 0, inherited_report["summary"]
     assert inherited_report["report_version"] == QUALITY_REPORT_VERSION
+
+    # Contrato por ferramenta: schema exige um item por id, com id e texto.
+    tool = translation_tool_config([1, 2, 3])
+    schema = tool["tools"][0]["toolSpec"]["inputSchema"]["json"]
+    assert tool["toolChoice"]["tool"]["name"] == TRANSLATION_TOOL_NAME
+    assert schema["properties"]["translations"]["items"]["required"] == ["id", "text"]
+    assert is_tool_unsupported_error("This model doesn't support tool use.")
+    assert not is_tool_unsupported_error("The maximum tokens you requested exceeds the model limit")
+
+    # Glossario com genero: o guia fixa a forma e o QC cobra a coerencia.
+    contexto = {
+        "names_and_terms": [
+            {"source": "Your Honor", "ptbr": "Meritíssima", "gender": "f", "note": "a juíza"},
+            {"source": "Vail", "ptbr": "Vail", "gender": "m"},
+            {"source": "sem ptbr", "ptbr": "", "gender": "f"},
+        ]
+    }
+    gloss = glossary_from_context(contexto)
+    assert len(gloss) == 2, gloss
+    assert gloss[0]["gender"] == "f"
+    assert gender_variants("Meritíssima") == ["Meritíssimo"]
+    assert gender_variants("Vail") == []
+
+    juiza_cues = [
+        SrtCue(id=1, number="1", timing="00:00:01,000 --> 00:00:03,000", text="Objection, Your Honor."),
+        SrtCue(id=2, number="2", timing="00:00:03,000 --> 00:00:05,000", text="Yes, Your Honor."),
+        SrtCue(id=3, number="3", timing="00:00:05,000 --> 00:00:07,000", text="Thank you."),
+    ]
+    juiza_tr = {
+        "1": {"status": "ok", "text": "Objeção, Meritíssima."},
+        "2": {"status": "ok", "text": "Sim, Meritíssimo."},
+        "3": {"status": "ok", "text": "Obrigado."},
+    }
+    conflitos = glossary_conflicts(juiza_cues, juiza_tr, gloss)
+    assert conflitos["Your Honor"]["cues"] == [2], conflitos
+    assert conflitos["Your Honor"]["certos"] == 1
+    relatorio_gen = build_quality_report(
+        juiza_cues, juiza_tr, max_lines=2, max_line_length=42, max_cps=99.0, glossary=gloss
+    )
+    codigos = {i["code"] for c in relatorio_gen["cues"] for i in c["issues"]}
+    assert "glossary_gender" in codigos, codigos
+    # sem glossario o comportamento antigo se mantem
+    sem_gloss = build_quality_report(juiza_cues, juiza_tr, max_lines=2, max_line_length=42, max_cps=99.0)
+    assert not any(i["code"] == "glossary_gender" for c in sem_gloss["cues"] for i in c["issues"])
 
     print("self-test ok")
     return 0
