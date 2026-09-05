@@ -1256,6 +1256,7 @@ class BedrockClient:
         *,
         max_tokens: int,
         temperature: float = 0.2,
+        tool_config: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         messages = [{"role": "user", "content": [{"text": user_text}]}]
         cmd = [
@@ -1283,6 +1284,8 @@ class BedrockClient:
             "--output",
             "json",
         ]
+        if tool_config:
+            cmd += ["--tool-config", json.dumps(tool_config, ensure_ascii=False)]
         try:
             proc = subprocess.run(
                 cmd,
@@ -1310,7 +1313,15 @@ class BedrockClient:
         content = data.get("output", {}).get("message", {}).get("content", [])
         chunks = []
         for block in content:
-            if isinstance(block, dict) and "text" in block:
+            if not isinstance(block, dict):
+                continue
+            if "toolUse" in block:
+                # A API ja devolve o argumento como objeto validado contra o schema.
+                # Serializar aqui deixa validacao, reparo e QC funcionando sem mudanca.
+                entrada = (block.get("toolUse") or {}).get("input")
+                if entrada is not None:
+                    chunks.append(json.dumps(entrada, ensure_ascii=False))
+            elif "text" in block:
                 chunks.append(str(block["text"]))
         text = "\n".join(chunks).strip()
         if not text:
@@ -1331,6 +1342,59 @@ def make_llm_client(profile: str, region: str, timeout: int, logger: JsonLogger)
     retornando `(texto, meta)`. Ver a secao "Usar com outra LLM" no README.
     """
     return BedrockClient(profile, region, timeout, logger)
+
+
+TRANSLATION_TOOL_NAME = "entregar_traducoes"
+
+
+def translation_tool_config(ids: list[int]) -> dict[str, Any]:
+    """Contrato de resposta como ferramenta, em vez de JSON pedido em prosa.
+
+    A API valida o schema e devolve objeto pronto, o que elimina a classe de falha
+    em que o modelo escapa mal uma aspa dentro da fala e quebra o lote inteiro.
+    """
+    return {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": TRANSLATION_TOOL_NAME,
+                    "description": (
+                        "Entrega a traducao em portugues brasileiro de cada legenda do lote atual. "
+                        f"Devolva exatamente um item para cada um dos {len(ids)} ids pedidos."
+                    ),
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "translations": {
+                                    "type": "array",
+                                    "description": "Uma entrada por legenda do lote, na ordem dos ids.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "integer", "description": "O id da legenda."},
+                                            "text": {
+                                                "type": "string",
+                                                "description": "A legenda em pt-BR, com as quebras de linha originais.",
+                                            },
+                                        },
+                                        "required": ["id", "text"],
+                                    },
+                                }
+                            },
+                            "required": ["translations"],
+                        }
+                    },
+                }
+            }
+        ],
+        "toolChoice": {"tool": {"name": TRANSLATION_TOOL_NAME}},
+    }
+
+
+def is_tool_unsupported_error(err: str) -> bool:
+    lower = (err or "").lower()
+    return "doesn't support tool use" in lower or "does not support tool use" in lower or "toolconfig" in lower
 
 
 def is_unavailable_model_error(err: str) -> bool:
@@ -1401,6 +1465,7 @@ class TranslatorJob:
         self.batches: list[Batch] = []
         self.translations: dict[str, dict[str, Any]] = load_json(self.translations_path, {})
         self.unavailable_models: set[str] = set()
+        self.models_without_tools: set[str] = set()
         self.protected_variant_tokens: set[str] = set()
 
     def request_stop(self) -> None:
@@ -1928,6 +1993,7 @@ class TranslatorJob:
             batch=batch.number,
             validator=lambda raw: validate_translation_payload(extract_json_object(raw), batch, protected),
             prompt_builder=lambda feedback: builder(self, batch, feedback=feedback),
+            tool_config=translation_tool_config([cue.id for cue in batch.cues]),
         )
         self.add_usage(state, meta)
         if outcome.get("soft_accepted") and outcome.get("payload"):
@@ -1950,6 +2016,7 @@ class TranslatorJob:
         validator: Any | None = None,
         max_cycles: int | None = None,
         prompt_builder: Any | None = None,
+        tool_config: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any], str, dict[str, Any]]:
         cycle = 0
         last_error = ""
@@ -1996,12 +2063,14 @@ class TranslatorJob:
                         except Exception:
                             call_system, call_prompt = system, prompt
                     try:
-                        raw, meta = client.converse(
+                        raw, meta = self.converse_com_ou_sem_ferramenta(
+                            client,
                             model,
                             call_system,
                             call_prompt,
                             max_tokens=current_max_tokens,
                             temperature=temperature,
+                            tool_config=tool_config,
                         )
                         raw_excerpt = raw[:800]
                         if meta.get("stopReason") == "max_tokens":
@@ -2129,6 +2198,50 @@ class TranslatorJob:
                 self.sleep_or_stop(sleep)
                 continue
             raise RuntimeError(f"Falha após tentar todos os modelos. Último erro: {last_error}")
+
+    def converse_com_ou_sem_ferramenta(
+        self,
+        client: BedrockClient,
+        model: str,
+        system_text: str,
+        user_text: str,
+        *,
+        max_tokens: int,
+        temperature: float,
+        tool_config: dict[str, Any] | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Usa o contrato por ferramenta quando o modelo aceita.
+
+        Modelo que nao suporta ferramenta e descoberto na primeira tentativa e
+        anotado, para nao pagar a descoberta de novo; a chamada e refeita na hora
+        com o contrato em texto, entao a tentativa nao e desperdicada.
+        """
+        usar = bool(tool_config) and model not in self.models_without_tools
+        try:
+            return client.converse(
+                model,
+                system_text,
+                user_text,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tool_config=tool_config if usar else None,
+            )
+        except BedrockCallError as exc:
+            if not usar or not is_tool_unsupported_error(str(exc)):
+                raise
+            self.models_without_tools.add(model)
+            self.logger.event(
+                "INFO",
+                "Modelo nao aceita contrato por ferramenta; usando o contrato em texto para ele.",
+                model=model,
+            )
+        return client.converse(
+            model,
+            system_text,
+            user_text,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
     @staticmethod
     def soft_consensus_record(soft_records: list[dict[str, Any]]) -> dict[str, Any] | None:
