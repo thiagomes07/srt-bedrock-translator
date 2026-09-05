@@ -2863,6 +2863,28 @@ UI_HTML = r"""<!doctype html>
       border-radius: 3px;
       overflow-wrap: anywhere;
     }
+    #help .sample {
+      display: block;
+      margin: 7px 0;
+      padding: 7px 9px;
+      background: #11161c;
+      color: #e9eef4;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      text-align: center;
+    }
+    #help .tip {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #2f5d38;
+      background: #f0faf3;
+      border: 1px solid #cbe7d4;
+      border-radius: 6px;
+      padding: 7px 9px;
+    }
+    #help .tip b { color: #16833a; }
     #help .pin-hint { margin: 8px 0 0; font-size: 11px; color: var(--muted); }
 
     /* ---- toasts ---- */
@@ -3206,173 +3228,207 @@ UI_HTML = r"""<!doctype html>
     const HELP = {
       painelEntrada: {
         t: "Painel de entrada",
-        p: "Aqui voce escolhe a legenda e como ela vai ser traduzida. Os valores padrao ja funcionam bem: na pratica voce so precisa conferir a legenda selecionada e clicar em Iniciar ou retomar.",
-        e: "Mexer nos numeros so faz sentido se algo deu errado, por exemplo diminuir Legendas por lote quando um modelo insiste em devolver JSON quebrado."
+        p: "E aqui que voce escolhe a legenda e ajusta como ela vai ser traduzida. O uso normal e curto: confira a legenda no primeiro campo e clique no botao azul. Todo o resto ja vem com valor bom.",
+        e: "Os campos estao em ordem de importancia: primeiro QUAL legenda, depois QUAL conta da AWS, depois QUAIS modelos, e so no fim as regras de formatacao da legenda.",
+        d: "Nao precisa mexer em nada para comecar."
       },
       refresh: {
         t: "Atualizar",
-        p: "Rele a pasta base procurando arquivos .srt e recarrega a lista de trabalhos. Nao inicia, nao para e nao altera nenhuma traducao: e so uma releitura do disco.",
-        e: "Voce acabou de baixar a legenda de outro filme e copiou para a pasta. Ela nao aparece no seletor porque a pagina foi carregada antes. Clique em Atualizar e ela aparece."
+        p: "Faz a pagina olhar de novo para a pasta do filme e para a lista de trabalhos. E so uma releitura: nada e traduzido, iniciado ou apagado por causa deste botao.",
+        e: "Voce deixou esta pagina aberta e, no Finder, copiou a legenda de outro filme para a pasta. Ela nao vai aparecer sozinha no campo de cima, porque a lista foi montada quando a pagina abriu. Clique em Atualizar e ela aparece.",
+        d: "So quando voce mexeu nos arquivos da pasta por fora."
       },
       file: {
         t: "Legenda encontrada",
-        p: "Lista os arquivos .srt achados na pasta base do servidor. A ordem prioriza o arquivo que esta na raiz da pasta e evita deixar versoes SDH em primeiro lugar, porque SDH traz descricoes de som que nem sempre voce quer.",
-        e: "Numa pasta com <code>Filme.srt</code> e <code>Subs/Filme.en.SDH.srt</code>, o primeiro da lista sera <code>Filme.srt</code>."
+        p: "Lista os arquivos .srt que estao na pasta que o servidor esta olhando. E daqui que voce escolhe o que traduzir.",
+        e: "Se a pasta do filme tem <code>Filme.srt</code> e <code>Subs/Filme.en.SDH.srt</code>, o primeiro da lista sera o <code>Filme.srt</code>. A versao SDH fica embaixo de proposito: ela e feita para surdos e traz descricoes de som como <code>[porta batendo]</code>, que nem todo mundo quer na legenda.",
+        d: "Escolha aqui. So use o campo de baixo se a legenda estiver em outra pasta."
       },
       path: {
         t: "Ou caminho absoluto",
-        p: "Use quando a legenda estiver fora da pasta base. Se este campo estiver preenchido, ele manda e o seletor acima e ignorado. Deixe vazio para usar o seletor.",
-        e: "<code>/Users/voce/Downloads/Outro.Filme.2024.srt</code>. Tambem funciona apontar para uma legenda <code>.INCOMPLETO.srt</code> ja gerada: ele reconhece o trabalho antigo e continua de onde parou."
+        p: "O endereco completo de uma legenda que nao esta na pasta acima. Se voce escrever algo aqui, este campo manda e a escolha do campo de cima e ignorada.",
+        e: "Para traduzir algo que esta em Downloads, cole <code>/Users/seu-usuario/Downloads/Filme.srt</code>. Atalho util: no Finder, clique no arquivo e aperte Cmd+Option+C, que copia o caminho completo pronto para colar aqui.",
+        d: "Deixe vazio no uso normal."
       },
       profile: {
         t: "AWS profile",
-        p: "Nome do perfil configurado no AWS CLI, em <code>~/.aws/credentials</code>. E com essa credencial que o script chama o Bedrock.",
-        e: "Se estiver errado, a primeira chamada falha com erro de credencial. Rode <code>aws configure list-profiles</code> no terminal para ver os nomes disponiveis."
+        p: "Diz qual conta da AWS usar. E o apelido que o AWS CLI guardou no seu computador quando voce fez login, e nao seu e-mail nem sua senha.",
+        e: "Para ver os apelidos que existem nesta maquina, rode no terminal <code>aws configure list-profiles</code>. O que esta preenchido aqui e o que ja funcionou.",
+        d: "Ja esta certo. So mude se for usar outra conta AWS."
       },
       region: {
         t: "Regiao",
-        p: "Regiao AWS onde o Bedrock sera chamado. O catalogo de modelos muda por regiao: um modelo que existe em uma pode nao existir em outra.",
-        e: "<code>us-east-1</code> e onde os modelos Claude e Nova responderam nesta conta. Trocar para uma regiao sem esses modelos faz todos falharem com ResourceNotFound."
+        p: "Em qual data center da AWS o pedido vai cair. Isso importa porque a lista de modelos disponiveis muda de regiao para regiao.",
+        e: "Em <code>us-east-1</code>, que fica na Virginia, os modelos Claude e Nova responderam nesta conta. Se voce trocar para <code>sa-east-1</code>, que e Sao Paulo, e bem provavel que esses modelos nem existam la e todos falhem de uma vez.",
+        d: "Deixe us-east-1."
       },
       models: {
         t: "Modelos em ordem de fallback",
-        p: "Um ID por linha, na ordem em que serao tentados. Se o primeiro falhar todas as tentativas, ele cai para o segundo, e assim por diante. IDs que comecam com <code>us.</code> sao inference profiles, exigidos pelo Bedrock para varios modelos novos.",
-        e: "A ordem padrao poe o Claude Sonnet primeiro por ser o melhor tradutor, e deixa modelos menores embaixo como rede de seguranca. Esse mesmo fallback e o que permite o mecanismo de consenso: quando dois modelos diferentes devolvem o mesmo texto suspeito, a validacao aceita em vez de travar."
+        p: "A fila de modelos, um por linha. Ele sempre tenta o de cima primeiro; se aquele nao der conta, desce para o proximo. E uma escada de reserva.",
+        e: "Pense num revezamento: o Claude Sonnet e o titular, porque traduz melhor. Se ele engasgar num trecho, o Haiku entra. Se o Haiku tambem engasgar, a Nova entra. Ter mais de um modelo aqui tem um segundo efeito importante: quando dois modelos diferentes devolvem exatamente o mesmo texto, o sistema entende que quem esta errado e a suspeita dele, e aceita a traducao em vez de ficar insistindo para sempre.",
+        d: "Nao precisa mexer. Tirar modelos daqui so enfraquece a rede de seguranca."
       },
       batchSize: {
         t: "Legendas por lote",
-        p: "Quantas legendas vao em cada chamada ao modelo. Lote maior da mais contexto e usa menos chamadas, mas gera resposta mais longa, com mais risco de JSON cortado ou quebrado.",
-        e: "Com 28 legendas por lote, um filme de 2435 legendas vira 87 lotes, cerca de 1,5 minuto de filme por chamada. Se o log mostrar muito erro de JSON, baixe para 20."
+        p: "A legenda nao vai inteira de uma vez: ela e traduzida em blocos. Este numero diz quantas falas vao em cada bloco. Bloco maior faz o modelo enxergar mais da cena de uma vez, o que ajuda no contexto, mas deixa a resposta longa e mais sujeita a vir cortada pela metade.",
+        e: "Com 28, o filme que voce acabou de traduzir (2435 falas) virou 87 blocos, cada um cobrindo cerca de um minuto e meio de filme. Se o log encher de linha amarela em varios blocos seguidos, baixar este numero para 20 costuma resolver.",
+        d: "Nao precisa mexer."
       },
       batchChars: {
         t: "Caracteres por lote",
-        p: "Teto de caracteres do lote. Ele fecha o lote antes de atingir Legendas por lote se as falas forem longas. Serve para o tamanho da resposta nao explodir em cenas de dialogo denso.",
-        e: "Com 28 legendas e 4300 caracteres, uma cena de falas longas pode fechar o lote em 20 legendas ao bater o limite de caracteres."
+        p: "Um segundo limite para o bloco, agora contando letras em vez de falas. Vale o que estourar primeiro. Serve para uma cena de falas muito longas nao gerar um bloco gigante.",
+        e: "Numa cena de conversa rapida, o bloco fecha com as 28 falas normais. Numa cena em que um personagem da um discurso, ele pode fechar com 18 falas, porque ja bateu os 4300 caracteres antes de chegar em 28.",
+        d: "Nao precisa mexer."
       },
       attempts: {
         t: "Tentativas por modelo",
-        p: "Quantas vezes insistir no mesmo modelo antes de passar para o proximo da lista. Cada nova tentativa leva no prompt o motivo da recusa anterior, entao ela nao e apenas uma repeticao.",
-        e: "Com 3, o Claude Sonnet tenta 3 vezes; se as 3 falharem, a vez passa para o Claude Haiku."
+        p: "Quantas vezes insistir com o mesmo modelo antes de chamar o proximo da fila. Nao e repeticao burra: cada nova tentativa vai com o motivo da recusa anterior escrito dentro do pedido.",
+        e: "Com 3: o Sonnet tenta, a resposta e recusada, e na segunda tentativa ele recebe junto um recado do tipo <i>sua resposta anterior foi recusada porque as falas 12 e 13 ficaram sem traduzir</i>. Se as 3 tentativas falharem, a vez passa para o Haiku.",
+        d: "Nao precisa mexer."
       },
       timeout: {
         t: "Timeout por chamada",
-        p: "Segundos de espera por uma resposta antes de considerar a chamada perdida. Lote grande e modelo lento precisam de mais tempo.",
-        e: "240s cobre um lote de 28 legendas com folga. Abaixo de 120s, lotes grandes podem ser cortados no meio e retentados a toa."
+        p: "Quanto tempo esperar por uma resposta antes de considerar que ela se perdeu no caminho. Bloco grande e modelo lento demoram mais.",
+        e: "240 segundos, ou seja 4 minutos, e bem folgado: na pratica um bloco de 28 falas volta em 10 a 15 segundos. Se voce baixar para 60, um bloco mais pesado pode ser cortado no meio e refeito a toa.",
+        d: "Nao precisa mexer."
       },
       maxLines: {
         t: "Maximo de linhas",
-        p: "Quantas linhas uma legenda pode ter na tela. O padrao da industria e 2: com 3 ou mais, a legenda cobre a imagem e fica cansativa.",
-        e: "Uma frase longa vira duas linhas equilibradas em vez de uma linha unica atravessando a tela inteira."
+        p: "Quantas linhas uma legenda pode ocupar na tela. Duas e o padrao do cinema e da TV: com tres ou mais, a legenda cobre a imagem e o olho se perde.",
+        e: "Uma fala longa fica assim, quebrada em duas:<span class='sample'>Voce sempre diz isso<br>quando algo esta errado.</span>Com 1 linha, essa mesma fala viraria uma tira unica atravessando a tela inteira.",
+        d: "Deixe 2."
       },
       lineLength: {
         t: "Caracteres por linha",
-        p: "Comprimento maximo de cada linha, contando so o texto visivel (tags como <code>&lt;i&gt;</code> nao contam). 42 e o valor usado nos guias de legendagem para portugues.",
-        e: "<code>Voce sempre diz isso quando algo esta errado.</code> tem 44 caracteres, entao e quebrado em duas linhas."
+        p: "O tamanho maximo de cada linha, contando so o que aparece na tela. 42 e o numero que os estudios usam em portugues: e mais ou menos o que o olho le de uma vez, sem precisar varrer a tela.",
+        e: "A fala <code>Voce sempre diz isso quando algo esta errado.</code> tem 44 caracteres e estoura o limite, entao ela e quebrada num ponto natural da frase:<span class='sample'>Voce sempre diz isso<br>quando algo esta errado.</span>",
+        d: "Deixe 42."
       },
       maxCps: {
         t: "CPS maximo",
-        p: "Caracteres por segundo, ou seja, velocidade de leitura. Ate 17 e confortavel. Este limite nao e cobrado de forma absoluta: o aviso so aparece quando a traducao ficou mais de 15 por cento mais lenta de ler do que o original ja era.",
-        e: "Muita legenda comercial ja passa de 17 cps na fonte. Nesta legenda, 48 por cento dos cues em ingles ja eram assim. Se cobrassemos o limite absoluto, metade do filme viraria aviso e voce nao conseguiria achar o problema de verdade. Original a 25 cps e traducao a 26 cps nao avisa; de 15 para 30 cps avisa."
+        p: "Velocidade de leitura: quantas letras aparecem na tela por segundo. Acima de mais ou menos 17, a legenda some antes de voce terminar de ler. Mas aqui este numero nao e cobrado no seco: ele e sempre comparado com a legenda original.",
+        e: "Por que comparado? Porque nesta legenda em ingles, 48 por cento das falas JA passavam de 17. Cobrando o numero puro, metade do filme viraria aviso e o problema de verdade sumiria no meio do barulho. Entao a regra e: original a 25 e traducao a 26 nao gera aviso, porque o filme ja era corrido ali. Original a 15 e traducao a 30 gera aviso, porque quem deixou pesado foi a traducao.",
+        d: "Deixe 17."
       },
       qcRounds: {
         t: "Rodadas de reparo QC",
-        p: "Depois de traduzir tudo, o QC procura erros duros. Este numero diz quantas vezes ele pode refazer os lotes afetados antes de desistir e marcar o arquivo como incompleto.",
-        e: "Com 2 rodadas: se um cue continuar com tag <code>&lt;i&gt;</code> quebrada depois de 2 tentativas, o arquivo final sai como <code>.INCOMPLETO.srt</code> em vez de <code>.OK.srt</code>."
+        p: "Terminada a traducao, ele passa um pente fino em tudo. Se achar erro grave numa fala, refaz o bloco inteiro daquela fala. Este numero e quantas vezes ele pode tentar consertar antes de desistir.",
+        e: "Uma fala voltou com o italico aberto e nao fechado, tipo <code>&lt;i&gt;Ola.</code> sem o <code>&lt;/i&gt;</code>. Isso bagunca a exibicao, entao ele refaz o bloco. Se depois de 2 rodadas continuar quebrado, ele para de gastar chamada e entrega o arquivo com INCOMPLETO no nome, avisando voce.",
+        d: "Deixe 2."
       },
       retryForever: {
         t: "Retentar ate concluir ou parar manualmente",
-        p: "Ligado, o trabalho nunca desiste sozinho de um lote: ele espera com backoff exponencial e volta a tentar ate voce clicar em Parar. Desligado, o lote que falhar e marcado com erro e a traducao segue adiante.",
-        e: "O Bedrock comeca a limitar chamadas por excesso de uso. Ligado, ele espera e continua sozinho. Desligado, aquele trecho do filme fica sem traducao no arquivo final."
+        p: "Ligado, ele nunca desiste sozinho de um bloco: espera um pouco, tenta de novo, espera mais um pouco, tenta de novo, ate dar certo ou ate voce clicar em Parar. Desligado, um bloco que falha e abandonado e a traducao segue sem ele.",
+        e: "E a diferenca entre voltar e achar o filme inteiro traduzido, ou voltar e achar um buraco de 30 falas bem no meio da cena mais importante. Caso tipico: a AWS comeca a limitar suas chamadas porque voce usou muito. Ligado, ele espera a limitacao passar e continua sozinho.",
+        d: "Deixe ligado."
       },
       retryQc: {
         t: "Refazer cues com erro duro de QC",
-        p: "Ao terminar, refaz automaticamente os lotes que contem cues reprovados no QC. Desligue apenas se voce quiser ver o resultado bruto do modelo, sem nenhuma correcao posterior.",
-        e: "Um cue voltou com o marcador musical perdido. Com esta opcao ligada, o lote inteiro daquele cue e refeito antes de fechar o arquivo."
+        p: "No fim de tudo, refaz automaticamente os blocos que tiverem alguma fala reprovada no pente fino.",
+        e: "Desligue apenas se voce quiser ver o que o modelo devolveu cru, sem nenhuma correcao depois. Isso serve para comparar modelos entre si, nao para traduzir um filme de verdade.",
+        d: "Deixe ligado."
       },
       contextPass: {
         t: "Criar guia de contexto antes de traduzir",
-        p: "Faz uma chamada extra no comeco que le amostras da legenda inteira e monta um guia do filme: tom, registro, nomes recorrentes e formas de tratamento. Esse guia acompanha todos os lotes e e o que mantem a traducao coerente do inicio ao fim.",
-        e: "E o que evita que o mesmo personagem seja tratado por voce no comeco e por tu no fim, ou que um apelido mude de traducao no meio do filme. Custa uma chamada a mais e vale a pena."
+        p: "Antes de comecar, ele le amostras do filme inteiro e escreve para si mesmo um resumo: quem sao os personagens, que tom o filme tem, como as pessoas se tratam. Esse resumo vai junto em todos os blocos.",
+        e: "E o que impede o problema classico de traducao em pedacos: o personagem tratar alguem por voce no comeco do filme e por tu no fim, ou um apelido virar uma coisa no bloco 3 e outra coisa no bloco 40. Custa uma chamada a mais, no comeco, uma vez so.",
+        d: "Deixe ligado."
       },
       polishPass: {
         t: "Rodar passe final de revisao",
-        p: "Uma segunda passada por todos os lotes, agora revisando a traducao ja feita em vez de traduzir do zero. Praticamente dobra o tempo e o custo.",
-        e: "E o passe que tende a pegar deslizes de sentido, como um <code>chat room</code> traduzido como grupo de e-mail. Use quando a legenda for para valer e o tempo nao importar."
+        p: "Uma segunda passada por tudo. Na primeira ele traduz; nesta, ele rele o que ja traduziu e melhora. Praticamente dobra o tempo e o custo.",
+        e: "E o passe que pega deslize de sentido. Nesta legenda, por exemplo, <code>chat room</code> saiu como <i>grupo de e-mail</i>. Esse tipo de erro passa batido na validacao automatica, porque esta em portugues correto e bem escrito; so uma releitura pega.",
+        d: "Ligue quando a legenda for pra valer e o tempo nao importar."
       },
       forceNew: {
         t: "Criar trabalho novo mesmo se ja existir estado",
-        p: "Ignora todo o progresso salvo e comeca do zero. Cuidado: o trabalho anterior daquela legenda deixa de ser continuado.",
-        e: "Voce trocou a lista de modelos e quer o filme inteiro traduzido pelo modelo novo, em vez de aproveitar o que ja foi feito pelo antigo."
+        p: "Joga fora todo o progresso salvo daquela legenda e comeca do zero.",
+        e: "Cuidado com este: se voce ja traduziu 80 por cento e marcar aqui, esses 80 por cento sao refeitos e cobrados de novo. So faz sentido quando voce mudou algo grande, como trocar a lista de modelos, e quer o filme inteiro no criterio novo.",
+        d: "Deixe desmarcado."
       },
       doctor: {
         t: "Testar Bedrock",
-        p: "Faz uma chamada real e minima (pede so a palavra OK) para CADA modelo da lista, usando o profile e a regiao preenchidos aqui. Serve como checagem de pre-voo antes de gastar tempo num filme inteiro.",
-        e: "Ele garante tres coisas: a credencial do profile e valida, a regiao responde, e a sua conta tem acesso liberado aquele modelo. Ele NAO avalia qualidade de traducao. Se voltar <code>AccessDeniedException</code>, o modelo precisa ser liberado no console da AWS em Amazon Bedrock, Model access."
+        p: "Um teste rapido de porta, antes de comecar pra valer. Ele manda um pedido minimo, literalmente pedindo a palavra OK, para cada modelo da lista, usando a conta e a regiao preenchidas aqui.",
+        e: "Serve para voce nao descobrir depois de 20 minutos que a credencial estava errada. Ele responde tres perguntas: a conta funciona? a regiao responde? esta conta tem permissao neste modelo? Se algum voltar <code>AccessDeniedException</code>, e questao de permissao: entre no console da AWS, va em Amazon Bedrock, Model access, e libere o modelo. O que ele NAO faz e avaliar qualidade de traducao: ele so testa se a porta abre.",
+        d: "Vale clicar antes do primeiro filme do dia."
       },
       start: {
         t: "Iniciar ou retomar",
-        p: "O botao principal. Se ja existe trabalho salvo para a legenda escolhida, ele continua exatamente de onde parou. Se nao existe, cria um trabalho novo. E seguro clicar duas vezes: um trabalho ja rodando nao e duplicado.",
-        e: "Voce traduziu 60 por cento ontem e fechou tudo. Hoje escolhe a mesma legenda e clica aqui: ele reconhece os lotes ja prontos e comeca do lote seguinte, sem retraduzir nada."
+        p: "O botao principal, e ele decide sozinho entre comecar e continuar: se ja existe trabalho para aquela legenda, retoma exatamente de onde parou; se nao existe, cria um novo.",
+        e: "Voce traduziu 60 por cento ontem e fechou o notebook. Hoje escolhe a mesma legenda e clica aqui: ele reconhece os blocos que ja estavam prontos e comeca do seguinte, sem retraduzir nem cobrar de novo pelo que ja estava feito. Clicar duas vezes sem querer tambem nao duplica nada.",
+        d: "E o botao que voce vai usar em 9 de cada 10 vezes."
       },
       resumeBtn: {
         t: "Retomar selecionado",
-        p: "Retoma o trabalho que estiver marcado na lista Trabalhos, e nao a legenda do seletor. Util quando o arquivo de origem nao esta mais na pasta base ou quando ha varios trabalhos e voce quer continuar um especifico.",
-        e: "A lista mostra um trabalho com status <code>stalled</code>, que significa progresso salvo mas processo morto. Selecione o cartao dele e clique aqui para voltar de onde parou."
+        p: "Continua o trabalho que estiver marcado na lista Trabalhos, aqui embaixo. A diferenca para o botao azul e que este ignora o campo de legenda la em cima e vai pelo cartao que voce escolheu na lista.",
+        e: "Serve principalmente quando a lista mostra um trabalho com status <code>stalled</code>, que quer dizer: o progresso esta salvo, mas o programa que estava traduzindo morreu. Clique no cartao dele e depois neste botao.",
+        d: "Use quando quiser continuar um trabalho especifico da lista."
       },
       stop: {
         t: "Parar",
-        p: "Pede uma parada limpa. A chamada que ja esta no ar termina, o progresso e gravado em disco e o trabalho para com status <code>stopped</code>. Nada do que ja foi traduzido se perde.",
-        e: "A parada nao e instantanea: ele pode levar alguns segundos ate a chamada em andamento voltar. Depois e so clicar em Iniciar ou retomar para continuar."
+        p: "Pede para parar. Nao e um corte seco: ele deixa a chamada que ja esta no ar terminar, grava tudo em disco e so entao para.",
+        e: "Por isso pode levar uns 10 segundos ate o status virar <code>stopped</code>, e isso e normal. Nada do que ja foi traduzido se perde: depois e so clicar em Iniciar ou retomar e ele volta do mesmo ponto.",
+        d: "Pode usar sem medo."
       },
       jobs: {
         t: "Trabalhos",
-        p: "Todo trabalho ja iniciado nesta pasta, com status e progresso. Clique num cartao para ver o status, o log e o lote atual dele no painel da direita.",
-        e: "Status possiveis: <code>running</code> em execucao, <code>stopped</code> parado por voce, <code>stalled</code> progresso salvo mas o processo morreu, <code>complete</code> terminou sem erro, <code>incomplete</code> terminou com pendencias, <code>failed</code> falhou."
+        p: "Todo trabalho que ja foi iniciado, com o quanto cada um andou. Clique num cartao para ver o status, o log e as falas dele no painel da direita.",
+        e: "Os status querem dizer: <code>running</code> traduzindo agora &middot; <code>stopped</code> voce mandou parar &middot; <code>stalled</code> o progresso esta salvo mas ninguem esta traduzindo, porque o programa caiu &middot; <code>complete</code> terminou limpo &middot; <code>incomplete</code> terminou faltando coisa &middot; <code>failed</code> deu erro.",
+        d: "Clique num cartao para acompanhar aquele trabalho."
       },
       status: {
         t: "Status",
-        p: "Situacao do trabalho selecionado, atualizada sozinha a cada 2,5 segundos. Voce nao precisa recarregar a pagina.",
-        e: "Se aparecer <code>stalled</code>, o progresso esta salvo mas ninguem esta traduzindo: o processo do servidor caiu. Clique em Retomar selecionado. Se aparecer <code>lote insistindo</code>, um lote entrou no segundo ciclo de modelos e vale olhar o log."
+        p: "O resumo do trabalho selecionado. Ele se atualiza sozinho a cada 2,5 segundos, entao voce nao precisa recarregar a pagina nem ficar clicando em nada.",
+        e: "Duas situacoes merecem sua atencao. <code>stalled</code> significa que ninguem esta traduzindo e voce precisa clicar em Retomar selecionado. E <code>lote insistindo</code> significa que um bloco ja passou por todos os modelos uma vez e voltou ao comeco da fila: vale abrir o log e ver do que ele esta reclamando.",
+        d: "So olhe. Nao ha nada para configurar aqui."
       },
       mProgress: {
         t: "Progresso",
-        p: "Porcentagem de legendas com traducao aceita, e nao porcentagem de lotes. Uma legenda so conta aqui depois de passar por toda a validacao.",
-        e: "1736 de 2435 legendas prontas mostram 71 por cento."
+        p: "Quanto do filme ja tem traducao aprovada. Conta falas, e nao blocos: uma fala so entra nesta conta depois de passar por toda a validacao.",
+        e: "1736 falas prontas de um total de 2435 aparecem aqui como 71 por cento.",
+        d: ""
       },
       mBatch: {
         t: "Lote",
-        p: "Qual lote esta sendo traduzido agora e quantos lotes o filme tem no total. Mostra um traco quando nao ha lote em andamento.",
-        e: "<code>63/87</code> significa que ele esta no lote 63 de 87."
+        p: "Qual bloco esta sendo traduzido agora e quantos blocos o filme tem no total.",
+        e: "<code>63/87</code> quer dizer que ele esta no bloco 63 de 87. Quando nao ha nada rodando, aparece so o total, tipo <code>-/87</code>.",
+        d: ""
       },
       mModel: {
         t: "Modelo atual",
-        p: "Qual modelo esta atendendo o lote neste momento. Se ele mudar sozinho para um modelo mais abaixo na lista, e porque o de cima falhou as tentativas.",
-        e: "Ver <code>nova-pro</code> aqui quando o topo da lista e o Sonnet indica que o Sonnet falhou e o fallback entrou."
+        p: "Qual modelo esta atendendo neste momento.",
+        e: "Se aparecer <code>nova-pro</code> aqui quando o primeiro da sua lista e o <code>claude-sonnet-4-6</code>, e sinal de que o Sonnet falhou naquele bloco e a reserva entrou. Acontecer de vez em quando e normal; acontecer o tempo todo e motivo para olhar o log.",
+        d: ""
       },
       mErrors: {
         t: "Erros QC",
-        p: "Legendas reprovadas em checagem dura: texto vazio, recusa do modelo, tag quebrada, marcador musical perdido, token protegido ausente. Enquanto este numero for maior que zero, o arquivo final sai como <code>.INCOMPLETO.srt</code>.",
-        e: "Este numero nao inclui avisos de legibilidade como linha longa ou leitura rapida. Aviso nao bloqueia o arquivo."
+        p: "Falas reprovadas por erro grave: texto vazio, o modelo se recusando a traduzir, italico quebrado, ou o simbolo de musica que sumiu. Enquanto este numero nao for zero, o arquivo final sai com INCOMPLETO no nome.",
+        e: "Este contador nao inclui os avisos leves, como linha comprida ou leitura rapida demais. Aviso nao impede o arquivo de sair como OK; erro grave impede.",
+        d: ""
       },
       mReview: {
         t: "Revisar",
-        p: "Legendas que a heuristica marcou como suspeitas de nao terem sido traduzidas, mas que dois modelos diferentes devolveram iguais. Nesse caso a evidencia aponta para a heuristica errada, e o texto e aceito com marca de revisao em vez de travar o lote.",
-        e: "Refrao de musica como <code>Guli guli guli guli ram sam sam</code> deve mesmo ficar igual ao original. Ele entra aqui para voce dar uma conferida, mas nao impede o <code>.OK.srt</code>."
+        p: "Falas que o sistema achou suspeitas de nao terem sido traduzidas, mas que dois modelos diferentes devolveram exatamente iguais. Quando isso acontece, quem provavelmente esta errado e a suspeita, e nao os modelos.",
+        e: "Refrao de musica como <code>Guli guli guli guli ram sam sam</code> e para ficar igual mesmo: nao existe traducao disso. A fala entra nesta conta para voce dar uma conferida depois, mas nao impede o arquivo de sair como OK.",
+        d: ""
       },
       arquivos: {
         t: "Arquivos gerados",
-        p: "Tudo fica ao lado da legenda original, na mesma pasta do filme. Sao tres coisas: a legenda traduzida, um arquivo sidecar ao lado dela, e a pasta de estado <code>.srt_translator_jobs/</code>.",
-        e: "A legenda traduzida tem o sufixo que indica o resultado: <code>.pt-BR.EM_ANDAMENTO.srt</code> enquanto roda, <code>.pt-BR.OK.srt</code> quando termina sem erro duro, <code>.pt-BR.INCOMPLETO.srt</code> quando sobrou pendencia. Todos sao SRT normais em UTF-8, com o mesmo numero de legendas e os mesmos tempos do original: da para abrir direto no VLC. Ao terminar, os arquivos antigos daquele trabalho sao apagados para sobrar so a legenda boa. O <code>.translator-state.json</code> ao lado e o que permite voce arrastar a legenda de volta e ele reconhecer o trabalho. Dentro de <code>.srt_translator_jobs/</code> ficam o estado, as traducoes por id, o log em jsonl e o <code>quality_report.json</code> com o detalhe de cada problema."
+        p: "Tudo e gravado na mesma pasta onde esta a legenda original. Nada vai para lugar escondido do sistema. Sao tres coisas:",
+        e: "<b>1. A legenda traduzida.</b> O final do nome conta o que aconteceu: <code>.pt-BR.EM_ANDAMENTO.srt</code> enquanto trabalha, <code>.pt-BR.OK.srt</code> quando terminou limpo, <code>.pt-BR.INCOMPLETO.srt</code> quando faltou algo. E um .srt comum: da para arrastar direto no VLC. Quando termina, ele apaga sozinho as versoes antigas, para nao sobrar tres arquivos parecidos te confundindo.<br><br><b>2. Um arquivo <code>.translator-state.json</code></b> colado na legenda traduzida. E a etiqueta dela. E por causa desse arquivo que voce pode arrastar uma legenda INCOMPLETO de volta aqui e o sistema reconhecer de qual trabalho ela veio, em vez de comecar do zero.<br><br><b>3. Uma pasta <code>.srt_translator_jobs</code></b>, que fica escondida por comecar com ponto. Dentro dela ficam o progresso salvo, o log completo e o <code>quality_report.json</code>, que lista fala por fala tudo que foi apontado.",
+        d: "Para assistir o filme, voce so precisa do arquivo .OK.srt."
       },
       log: {
         t: "Log",
-        p: "Eventos do trabalho em ordem cronologica, gravados tambem em disco em <code>events.jsonl</code>. Amarelo e aviso, vermelho e erro, verde e lote concluido.",
-        e: "Uma sequencia saudavel e: Iniciando traducao do lote N, Chamando Bedrock, Resposta validada, Lote N concluido. Aviso repetido no mesmo lote indica que a validacao esta recusando a resposta."
+        p: "O que esta acontecendo, em ordem e com hora. Tambem fica salvo em disco, entao voce nao perde nada ao fechar a pagina.",
+        e: "Um ciclo saudavel se repete assim: <i>Iniciando traducao do lote N</i>, <i>Chamando Bedrock</i>, <i>Resposta validada</i>, <i>Lote N concluido</i>. As cores ajudam: cinza e rotina, verde e coisa concluida, amarelo e aviso (ele vai tentar de novo sozinho) e vermelho e erro. Amarelo repetido no mesmo bloco quer dizer que a validacao esta recusando as respostas; o motivo vem escrito no fim da linha.",
+        d: "So olhe quando algo parecer travado."
       },
       preview: {
         t: "Lote atual",
-        p: "As legendas do lote em andamento. Para cada uma aparece o texto original em cinza e, abaixo, a traducao quando ela ja existe.",
-        e: "E aqui que voce ve a qualidade saindo em tempo real, sem precisar abrir o arquivo."
+        p: "As falas do bloco que esta sendo traduzido agora. Em cinza o texto original e, embaixo, a traducao assim que ela chega.",
+        e: "E onde voce ve a qualidade saindo em tempo real, sem precisar abrir o arquivo no meio do caminho para espiar.",
+        d: ""
       }
     };
 
@@ -3407,6 +3463,7 @@ UI_HTML = r"""<!doctype html>
       if (!h) return false;
       helpBox.innerHTML = `<h4>${escapeHtml(h.t)}</h4><p>${h.p}</p>` +
         (h.e ? `<div class="ex"><b>Na pratica</b>${h.e}</div>` : "") +
+        (h.d ? `<div class="tip"><b>Precisa mexer?</b> ${h.d}</div>` : "") +
         `<p class="pin-hint">Clique no i para fixar. Esc fecha.</p>`;
       return true;
     }
