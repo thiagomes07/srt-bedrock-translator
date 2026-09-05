@@ -3265,7 +3265,7 @@ UI_HTML = r"""<!doctype html>
       color: var(--muted);
       flex-wrap: wrap;
     }
-    .compare-head .mini {
+    .compare-head .mini, .compare-head .mini label {
       display: flex;
       align-items: center;
       gap: 5px;
@@ -3496,10 +3496,10 @@ UI_HTML = r"""<!doctype html>
         <div class="compare-head">
           <span>Comparar traducao <button class="info" data-help="comparar" aria-label="Ajuda">i</button></span>
           <span class="spacer"></span>
-          <label class="mini"><select id="cmpScope"><option value="live">ultimas 60 (ao vivo)</option><option value="all">filme inteiro</option></select></label>
-          <label class="mini"><input id="cmpSearch" type="search" placeholder="buscar no texto..." autocomplete="off"></label>
-          <label class="mini"><input type="checkbox" id="cmpFollow" checked> acompanhar</label>
-          <label class="mini"><input type="checkbox" id="cmpReview"> so revisar</label>
+          <span class="mini"><select id="cmpScope"><option value="live">ultimas 60 (ao vivo)</option><option value="all">filme inteiro</option></select><button class="info" data-help="cmpScope" aria-label="Ajuda">i</button></span>
+          <span class="mini"><input id="cmpSearch" type="search" placeholder="buscar no texto..." autocomplete="off"><button class="info" data-help="cmpSearch" aria-label="Ajuda">i</button></span>
+          <span class="mini" id="wrapFollow"><label><input type="checkbox" id="cmpFollow" checked> acompanhar</label><button class="info" data-help="cmpFollow" aria-label="Ajuda">i</button></span>
+          <span class="mini" id="wrapReview"><label><input type="checkbox" id="cmpReview"> so revisar</label><button class="info" data-help="cmpReview" aria-label="Ajuda">i</button></span>
           <span class="mini" id="cmpCount"></span>
         </div>
         <div id="compare" class="compare"></div>
@@ -3705,6 +3705,30 @@ UI_HTML = r"""<!doctype html>
         p: "O que esta acontecendo, em ordem e com hora. Tambem fica salvo em disco, entao voce nao perde nada ao fechar a pagina.",
         e: "Um ciclo saudavel se repete assim: <i>Iniciando traducao do lote N</i>, <i>Chamando Bedrock</i>, <i>Resposta validada</i>, <i>Lote N concluido</i>. As cores ajudam: cinza e rotina, verde e coisa concluida, amarelo e aviso (ele vai tentar de novo sozinho) e vermelho e erro. Amarelo repetido no mesmo bloco quer dizer que a validacao esta recusando as respostas; o motivo vem escrito no fim da linha.",
         d: "So olhe quando algo parecer travado."
+      },
+      cmpScope: {
+        t: "Escopo da lista",
+        p: "Escolhe se voce esta acompanhando o trabalho acontecer ou revisando o que ja ficou pronto.",
+        e: "<b>Ultimas 60 (ao vivo)</b> mostra so o trecho mais recente e vai se atualizando conforme cada bloco fecha: e o modo de assistir a traducao sair.<br><br><b>Filme inteiro</b> carrega todas as falas ja traduzidas de uma vez, para voce navegar e revisar do comeco ao fim. Num filme de 1770 falas isso e bem mais pesado, entao ele so e buscado quando voce pede, e nao a cada atualizacao da tela.",
+        d: "Rodando, use ao vivo. Terminado, use filme inteiro."
+      },
+      cmpSearch: {
+        t: "Buscar no texto",
+        p: "Filtra a lista por um trecho de texto, procurando ao mesmo tempo no original em ingles e na traducao em portugues.",
+        e: "Digite o nome de um personagem, por exemplo <code>Aaron</code>, e veja de uma vez todas as falas em que ele aparece: da para conferir se o nome e o tratamento ficaram consistentes no filme inteiro. Tambem serve para uma expressao especifica que voce quer saber como foi resolvida.",
+        d: "Combine com o escopo filme inteiro para revisar de verdade."
+      },
+      cmpFollow: {
+        t: "Acompanhar",
+        p: "Mantem a lista grudada na fala traduzida mais recente, rolando sozinha conforme o trabalho avanca. So aparece enquanto existe traducao em andamento: com o trabalho terminado, nao ha nada novo chegando para acompanhar.",
+        e: "Se voce rolar para cima para ler alguma coisa, ele se desmarca sozinho para nao arrastar a tela debaixo do seu olho. Quando voce volta ao fim da lista, ele se remarca. Pedir <b>filme inteiro</b> tambem desliga, porque quem pediu tudo quer navegar.",
+        d: "Deixe ligado enquanto assiste a traducao acontecer."
+      },
+      cmpReview: {
+        t: "So revisar",
+        p: "Mostra apenas as falas que ficaram marcadas como <b>revisar</b>, escondendo todo o resto. So aparece quando existe pelo menos uma; o numero ao lado diz quantas sao.",
+        e: "Sao as falas em que a validacao achou que o texto nao tinha sido traduzido, mas dois modelos diferentes devolveram exatamente igual ao original. Quase sempre e refrao de musica ou onomatopeia, que devem mesmo ficar iguais. Como a duvida existe, elas ficam separadas para voce bater o olho.<br><br>Se o contador nao aparece, nenhuma fala precisou disso e nao ha o que revisar.",
+        d: "Marque para conferir so essas, no fim do trabalho."
       },
       comparar: {
         t: "Comparar traducao",
@@ -4108,6 +4132,8 @@ UI_HTML = r"""<!doctype html>
       preview.innerHTML = items.length ? items.map(renderCue).join("") : "<div class='empty'>Sem lote ativo no momento.</div>";
       renderCompare(job);
     }
+    let escopoTocado = false;    // o usuario escolheu o escopo na mao?
+    let escopoAjustadoPara = null;
     let fullCompare = null;      // lista completa, buscada sob demanda
     let fullCompareDone = -1;    // quantas falas existiam quando ela foi buscada
 
@@ -4121,7 +4147,27 @@ UI_HTML = r"""<!doctype html>
     }
 
     function renderCompare(job) {
-      const scope = document.querySelector("#cmpScope").value;
+      // Controle que nao faz nada no estado atual so atrapalha: acompanhar sem trabalho
+      // rodando nao tem o que seguir, e filtrar por revisao sem nenhuma marcada esvazia
+      // a lista sem motivo.
+      const rodando = job.status === "running";
+      const revisar = job.review_cues || 0;
+      const wrapFollow = document.querySelector("#wrapFollow");
+      const wrapReview = document.querySelector("#wrapReview");
+      wrapFollow.hidden = !rodando;
+      wrapReview.hidden = revisar === 0;
+      wrapReview.querySelector("label").childNodes[1].nodeValue = ` so revisar (${revisar})`;
+      if (!rodando) document.querySelector("#cmpFollow").checked = false;
+      if (revisar === 0) document.querySelector("#cmpReview").checked = false;
+      const seletor = document.querySelector("#cmpScope");
+      // Ao abrir um trabalho que ja terminou, o util e a lista inteira. Isso e feito
+      // uma vez por trabalho e nunca sobrescreve uma escolha manual, nem puxa o
+      // usuario para fora da visao ao vivo quando o trabalho acaba de terminar.
+      if (!escopoTocado && escopoAjustadoPara !== job.job_id) {
+        escopoAjustadoPara = job.job_id;
+        if (!rodando && (job.done_cues || 0) > 0) seletor.value = "all";
+      }
+      const scope = seletor.value;
       if (scope === "all") {
         // busca a lista inteira uma vez e so refaz quando o numero de falas muda,
         // para nao mandar o filme todo a cada polling
@@ -4197,6 +4243,7 @@ UI_HTML = r"""<!doctype html>
     };
     document.querySelector("#cmpReview").onchange = () => refreshJob().catch(() => {});
     document.querySelector("#cmpScope").onchange = () => {
+      escopoTocado = true;
       // trocar de escopo desliga o acompanhamento: quem pediu o filme inteiro quer navegar
       if (document.querySelector("#cmpScope").value === "all") document.querySelector("#cmpFollow").checked = false;
       refreshJob().catch(() => {});
