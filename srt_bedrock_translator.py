@@ -2488,7 +2488,61 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
     )
     state["log_tail"] = JsonLogger(job_dir, echo=False).tail(240)
     state["preview"] = preview_current(job_dir, state, translations)
+    state["compare"] = compare_recent(state, translations)
     return state
+
+
+_DOC_CACHE: dict[str, tuple[float, "SrtDocument"]] = {}
+_DOC_CACHE_LOCK = threading.Lock()
+
+
+def load_source_doc_cached(path: Path) -> "SrtDocument | None":
+    """A UI faz polling a cada 2,5s; reparsear a legenda inteira toda vez e desperdicio."""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    key = str(path)
+    with _DOC_CACHE_LOCK:
+        hit = _DOC_CACHE.get(key)
+        if hit and hit[0] == mtime:
+            return hit[1]
+    try:
+        doc = SrtDocument.load(path)
+    except Exception:
+        return None
+    with _DOC_CACHE_LOCK:
+        _DOC_CACHE[key] = (mtime, doc)
+        if len(_DOC_CACHE) > 8:
+            _DOC_CACHE.pop(next(iter(_DOC_CACHE)))
+    return doc
+
+
+def compare_recent(state: dict[str, Any], translations: dict[str, Any], limit: int = 60) -> list[dict[str, Any]]:
+    """Ultimas falas ja traduzidas, com fonte e traducao lado a lado."""
+    src = state.get("source_path")
+    if not src:
+        return []
+    doc = load_source_doc_cached(Path(src))
+    if doc is None:
+        return []
+    done = [
+        (cue, rec)
+        for cue in doc.cues
+        if isinstance(rec := translations.get(str(cue.id)), dict)
+        and rec.get("status") == "ok"
+        and str(rec.get("text", "")).strip()
+    ]
+    return [
+        {
+            "id": cue.id,
+            "time": cue.timing,
+            "source": cue.text,
+            "translation": str(rec.get("text", "")),
+            "review": bool(rec.get("review_flag")),
+        }
+        for cue, rec in done[-limit:]
+    ]
 
 
 def preview_current(job_dir: Path, state: dict[str, Any], translations: dict[str, Any]) -> dict[str, Any]:
@@ -2496,9 +2550,8 @@ def preview_current(job_dir: Path, state: dict[str, Any], translations: dict[str
     current = state.get("current") or {}
     if not src or not Path(src).exists():
         return {}
-    try:
-        doc = SrtDocument.load(Path(src))
-    except Exception:
+    doc = load_source_doc_cached(Path(src))
+    if doc is None:
         return {}
     batch_no = current.get("batch")
     if not batch_no:
@@ -3089,6 +3142,67 @@ UI_HTML = r"""<!doctype html>
     .cue .tag.pending { color: var(--amber); }
     .cue pre { margin: 4px 0 0; white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
     .cue pre.src { color: var(--muted); }
+    .compare-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    .compare-head .mini {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0;
+    }
+    .compare-head .mini input { width: auto; }
+    .compare-head .spacer { flex: 1; }
+    .compare {
+      height: 300px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .cmp-legend {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 86px 1fr 1fr;
+      gap: 12px;
+      padding: 8px 12px;
+      background: #f4f7fb;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .cmp-row {
+      display: grid;
+      grid-template-columns: 86px 1fr 1fr;
+      gap: 12px;
+      padding: 9px 12px;
+      border-bottom: 1px solid #eef1f6;
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+    .cmp-row:last-child { border-bottom: 0; }
+    .cmp-row:nth-child(even) { background: #fcfdff; }
+    .cmp-row.review { background: #fffaf0; }
+    .cmp-id { color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .cmp-id .flag { display: block; color: var(--amber); font-weight: 800; margin-top: 3px; }
+    .cmp-src, .cmp-pt { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .cmp-src { color: #6b7280; }
+    .cmp-pt { color: var(--ink); }
     .pill {
       display: inline-flex;
       align-items: center;
@@ -3261,6 +3375,15 @@ UI_HTML = r"""<!doctype html>
           <div class="sub-head">Lote atual <button class="info" data-help="preview" aria-label="Ajuda">i</button></div>
           <div id="preview" class="preview"></div>
         </div>
+      </div>
+      <div class="panel-body" style="padding-top:0;">
+        <div class="compare-head">
+          <span>Comparar traducao <button class="info" data-help="comparar" aria-label="Ajuda">i</button></span>
+          <span class="spacer"></span>
+          <label class="mini"><input type="checkbox" id="cmpFollow" checked> acompanhar o mais recente</label>
+          <label class="mini"><input type="checkbox" id="cmpReview"> so as marcadas para revisao</label>
+        </div>
+        <div id="compare" class="compare"></div>
       </div>
     </section>
   </main>
@@ -3463,6 +3586,12 @@ UI_HTML = r"""<!doctype html>
         p: "O que esta acontecendo, em ordem e com hora. Tambem fica salvo em disco, entao voce nao perde nada ao fechar a pagina.",
         e: "Um ciclo saudavel se repete assim: <i>Iniciando traducao do lote N</i>, <i>Chamando Bedrock</i>, <i>Resposta validada</i>, <i>Lote N concluido</i>. As cores ajudam: cinza e rotina, verde e coisa concluida, amarelo e aviso (ele vai tentar de novo sozinho) e vermelho e erro. Amarelo repetido no mesmo bloco quer dizer que a validacao esta recusando as respostas; o motivo vem escrito no fim da linha.",
         d: "So olhe quando algo parecer travado."
+      },
+      comparar: {
+        t: "Comparar traducao",
+        p: "As falas que ja foram traduzidas, com o original a esquerda e o portugues a direita, para voce ir conferindo a qualidade enquanto o trabalho roda.",
+        e: "A lista se atualiza sozinha a cada lote que fecha e mostra as ultimas 60 falas. Marque <b>so as marcadas para revisao</b> para ver apenas aquelas que dois modelos devolveram iguais ao original, que sao as unicas que valem uma conferida manual. Se voce rolar para cima para ler algo, o acompanhamento automatico desliga sozinho e volta quando voce chegar no fim de novo.",
+        d: "So olhe. E o melhor lugar para julgar se a traducao esta boa."
       },
       preview: {
         t: "Lote atual",
@@ -3858,6 +3987,27 @@ UI_HTML = r"""<!doctype html>
       const preview = document.querySelector("#preview");
       const items = (job.preview && job.preview.items) || [];
       preview.innerHTML = items.length ? items.map(renderCue).join("") : "<div class='empty'>Sem lote ativo no momento.</div>";
+      renderCompare(job);
+    }
+    function renderCompare(job) {
+      const all = job.compare || [];
+      const onlyReview = document.querySelector("#cmpReview").checked;
+      const list = onlyReview ? all.filter(i => i.review) : all;
+      const box = document.querySelector("#compare");
+      const follow = document.querySelector("#cmpFollow").checked;
+      if (!list.length) {
+        box.innerHTML = "<div class='empty' style='padding:12px'>" +
+          (onlyReview ? "Nenhuma fala marcada para revisao." : "Nada traduzido ainda. As falas aparecem aqui conforme cada lote fecha.") +
+          "</div>";
+        return;
+      }
+      box.innerHTML = "<div class='cmp-legend'><span>fala</span><span>original</span><span>portugues</span></div>" +
+        list.map(i => `<div class="cmp-row${i.review ? " review" : ""}">
+          <div class="cmp-id">#${i.id}<span style="display:block">${escapeHtml((i.time || "").slice(0, 8))}</span>${i.review ? "<span class='flag'>revisar</span>" : ""}</div>
+          <div class="cmp-src">${escapeHtml(i.source || "")}</div>
+          <div class="cmp-pt">${escapeHtml(i.translation || "")}</div>
+        </div>`).join("");
+      if (follow) box.scrollTop = box.scrollHeight;
     }
     function renderCue(item) {
       const st = item.status || "";
@@ -3889,6 +4039,15 @@ UI_HTML = r"""<!doctype html>
       } catch (e) { toast("Falha ao atualizar", e.message, "error"); }
       finally { busy("#refresh", false); }
     };
+    document.querySelector("#cmpReview").onchange = () => refreshJob().catch(() => {});
+    document.querySelector("#compare").addEventListener("scroll", ev => {
+      const box = ev.target;
+      const noFim = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
+      const follow = document.querySelector("#cmpFollow");
+      // rolar para tras significa que o usuario quer ler algo; nao arraste a tela dele
+      if (!noFim && follow.checked) follow.checked = false;
+      if (noFim && !follow.checked) follow.checked = true;
+    });
     document.querySelector("#start").onclick = () => startJob().catch(err => toast("Nao consegui iniciar", err.message, "error"));
     document.querySelector("#resume").onclick = () => resumeJob().catch(err => toast("Nao consegui retomar", err.message, "error"));
     document.querySelector("#stop").onclick = () => stopJob().catch(err => toast("Nao consegui parar", err.message, "error"));
