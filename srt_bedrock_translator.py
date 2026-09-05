@@ -1363,8 +1363,41 @@ class TranslatorJob:
         atomic_write_text(output_path, text, encoding="utf-8-sig")
         self.write_sidecar(output_path)
         state["last_written_output"] = str(output_path)
+        if final:
+            self.cleanup_superseded_outputs(state, output_path)
         self.save_state(state)
         return output_path
+
+    def cleanup_superseded_outputs(self, state: dict[str, Any], keep: Path) -> None:
+        """Remove a saida parcial e a variante final antiga deste mesmo job.
+
+        Sem isso a pasta do filme acumula .EM_ANDAMENTO.srt, .INCOMPLETO.srt e
+        .OK.srt lado a lado e nao da para saber qual e a legenda boa.
+        """
+        candidates = [
+            Path(state[key])
+            for key in ("partial_output_path", "success_output_path", "incomplete_output_path")
+            if state.get(key)
+        ]
+        for path in candidates:
+            if path == keep or not path.exists():
+                continue
+            sidecar = path.with_name(path.name + ".translator-state.json")
+            # So apaga o que este job escreveu: o sidecar tem que apontar para este job_id.
+            owner = load_json(sidecar, {}).get("job_id") if sidecar.exists() else None
+            if owner != self.job_id:
+                self.logger.event(
+                    "WARN",
+                    "Arquivo antigo com nome de saida nao pertence a este trabalho; mantendo.",
+                    error=str(path),
+                )
+                continue
+            for target in (path, sidecar):
+                try:
+                    target.unlink()
+                except OSError as exc:
+                    self.logger.event("WARN", "Nao consegui remover saida antiga.", error=f"{target}: {exc}")
+            self.logger.event("INFO", "Saida antiga removida para nao confundir com a legenda final.", error=str(path))
 
     def try_write_output(self, state: dict[str, Any], final: bool = False) -> Path | None:
         try:
@@ -1445,6 +1478,16 @@ class TranslatorJob:
                 state["status"] = "complete"
                 state["last_error"] = None
                 self.logger.event("INFO", "Trabalho finalizado com sucesso.", done=len(self.doc.cues), total=len(self.doc.cues), status="complete")
+            review_ids = sorted(
+                {int(cue_id) for cue_id, rec in self.translations.items() if rec.get("review_flag")}
+            )
+            state["review_cue_ids"] = review_ids
+            if review_ids:
+                self.logger.event(
+                    "WARN",
+                    f"{len(review_ids)} legendas foram aceitas por consenso entre modelos e merecem uma conferida.",
+                    cue_ids=review_ids[:40],
+                )
             state["final_output_path"] = str(final_path)
             self.save_state(state)
             return state
