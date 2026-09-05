@@ -414,8 +414,8 @@ class JobConfig:
     retry_qc_issues: bool = True
     qc_repair_rounds: int = 2
     semantic_review: bool = True
-    semantic_min_signals: int = 1
-    semantic_budget: int = 600
+    semantic_min_signals: int = 0
+    semantic_budget: int = 100000
     semantic_sample_pct: float = 0.10
     max_lines: int = 2
     max_line_length: int = 42
@@ -1957,9 +1957,14 @@ class TranslatorJob:
             if self.config.semantic_review:
                 confirmados = self.semantic_review(client, state)
                 if confirmados:
-                    # Refaz os lotes das falas confirmadas, levando a crítica do juiz.
-                    self.translate_all(client, state, polish=False)
-                    self.registrar_mudancas_da_revisao(confirmados)
+                    mudou = self.repair_semantic_cues(client, state, confirmados)
+                    self.write_quality_report(state)
+                    self.save_state(state)
+                    self.logger.event(
+                        "INFO",
+                        f"Revisão de sentido concluída: {mudou} de {len(confirmados)} falas mudaram de fato.",
+                        cue_ids=confirmados[:30],
+                    )
             if self.config.polish_pass and not self.missing_ids():
                 self.translate_all(client, state, polish=True)
                 if self.config.retry_qc_issues:
@@ -2311,6 +2316,70 @@ class TranslatorJob:
         state["semantic_review_cue_ids"] = confirmados
         self.save_state(state)
         return confirmados
+
+    def repair_semantic_cues(self, client: BedrockClient, state: dict[str, Any], cue_ids: list[int]) -> int:
+        """Refaz só as falas acusadas, sem tocar nas vizinhas que estavam boas."""
+        assert self.doc is not None
+        por_id = {cue.id: cue for cue in self.doc.cues}
+        indice = {cue.id: i for i, cue in enumerate(self.doc.cues)}
+        mudou = 0
+        for inicio in range(0, len(cue_ids), 10):
+            if self.stopped():
+                raise JobStopped()
+            grupo = [por_id[c] for c in cue_ids[inicio : inicio + 10] if c in por_id]
+            if not grupo:
+                continue
+            # vizinhas de cada alvo, como leitura
+            vizinhos: dict[int, dict[str, Any]] = {}
+            for cue in grupo:
+                i = indice[cue.id]
+                for j in range(max(0, i - 2), min(len(self.doc.cues), i + 3)):
+                    vz = self.doc.cues[j]
+                    if vz.id in {c.id for c in grupo}:
+                        continue
+                    vizinhos[vz.id] = {
+                        "id": vz.id,
+                        "original_ingles": vz.text,
+                        "ptbr": self.translations.get(str(vz.id), {}).get("text", ""),
+                    }
+            system, prompt = build_semantic_fix_prompt(self, grupo, [vizinhos[k] for k in sorted(vizinhos)])
+            sintetico = Batch(0, grupo, grupo[0].id, grupo[-1].id)
+            protegidos = protected_tokens_for_batch(self, sintetico)
+            try:
+                texto, meta, modelo, _out = self.call_with_fallback(
+                    client,
+                    state,
+                    system,
+                    prompt,
+                    max_tokens=estimate_max_tokens(sintetico),
+                    temperature=0.15,
+                    stage="fix",
+                    max_cycles=2,
+                    validator=lambda raw: validate_translation_payload(extract_json_object(raw), sintetico, protegidos),
+                    tool_config=translation_tool_config(),
+                )
+            except Exception as exc:
+                self.logger.event("WARN", "Não consegui refazer este grupo de falas; mantenho a tradução atual.", error=str(exc)[:400])
+                for cue in grupo:
+                    self.translations[str(cue.id)]["status"] = "ok"
+                continue
+            self.add_usage(state, meta)
+            novos = validate_translation_payload(extract_json_object(texto), sintetico, protegidos)
+            agora = utc_now()
+            for cue_id, texto_novo in novos.items():
+                rec = self.translations.get(cue_id, {})
+                antes = rec.get("text_before_review") or rec.get("text", "")
+                formatado = apply_subtitle_formatting(texto_novo, self.config.max_line_length, self.config.max_lines)
+                rec.update({"text": formatado, "status": "ok", "model": modelo, "updated_at": agora})
+                if normalize_subtitle_text(antes) != normalize_subtitle_text(formatado):
+                    rec["review_flag"] = "sentido_refeito"
+                    rec["text_before_review"] = antes
+                    mudou += 1
+                else:
+                    rec.pop("text_before_review", None)
+                self.translations[cue_id] = rec
+            self.save_translations()
+        return mudou
 
     def registrar_mudancas_da_revisao(self, cue_ids: list[int]) -> None:
         """Guarda o antes e o depois para a revisão poder ser conferida e desfeita."""
@@ -2926,6 +2995,53 @@ def build_judge_prompt(job: "TranslatorJob", pares: list[dict[str, Any]]) -> tup
     return system, prompt_json(payload)
 
 
+def build_semantic_fix_prompt(
+    job: "TranslatorJob",
+    alvos: list[SrtCue],
+    vizinhanca: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Pede a correção só das falas acusadas, com as vizinhas como leitura.
+
+    Refazer o lote inteiro para consertar uma fala re-sorteia dezenas de traduções
+    que estavam boas. Aqui as vizinhas entram como contexto imutável.
+    """
+    context = load_json(job.context_path, {})
+    system = (
+        "Voce e tradutor senior de legendas para portugues brasileiro. "
+        "Um revisor apontou erro de sentido em legendas especificas. "
+        "Corrija APENAS as legendas pedidas, uma por id, mantendo o estilo do restante. "
+        "As legendas vizinhas sao so contexto: nao as devolva nem as altere. "
+        "Se ao ler o original voce concluir que a traducao atual ja esta correta, "
+        "devolva ela mesma sem mudanca."
+    )
+    corrigir = []
+    for cue in alvos:
+        rec = job.translations.get(str(cue.id), {})
+        corrigir.append(
+            {
+                "id": cue.id,
+                "time": cue.timing,
+                "original_ingles": cue.text,
+                "traducao_atual": rec.get("text", ""),
+                "critica_do_revisor": rec.get("semantic_note", ""),
+                "categoria": rec.get("semantic_category", ""),
+            }
+        )
+    payload = {
+        "movie_context": context,
+        "glossario_decidido_use_exatamente": glossary_from_context(context),
+        "regras": [
+            f"Use no maximo {job.config.max_lines} linhas e ate {job.config.max_line_length} caracteres por linha.",
+            "Preserve tags como <i> e os simbolos musicais do original.",
+            "Preserve a estrutura de dois falantes com hifen quando existir.",
+            "Devolva exatamente um item para cada id em legendas_para_corrigir.",
+        ],
+        "contexto_ao_redor_nao_devolver": vizinhanca,
+        "legendas_para_corrigir": corrigir,
+    }
+    return system, prompt_json(payload)
+
+
 def estimate_max_tokens(batch: Batch, *, polish: bool = False) -> int:
     chars = sum(len(cue.text) for cue in batch.cues)
     return max(1800, min(9000, int(chars * 1.6) + len(batch.cues) * 70 + (1200 if polish else 1800)))
@@ -2962,8 +3078,8 @@ def build_config_from_args(args: argparse.Namespace) -> JobConfig:
         retry_qc_issues=not getattr(args, "no_retry_qc_issues", False),
         qc_repair_rounds=getattr(args, "qc_repair_rounds", 2),
         semantic_review=bool(getattr(args, "semantic_review", True)),
-        semantic_min_signals=int(getattr(args, "semantic_min_signals", 1) or 1),
-        semantic_budget=int(getattr(args, "semantic_budget", 600) or 600),
+        semantic_min_signals=int(getattr(args, "semantic_min_signals", 0) or 0),
+        semantic_budget=int(getattr(args, "semantic_budget", 100000) or 100000),
         semantic_sample_pct=float(getattr(args, "semantic_sample_pct", 0.10) or 0.0),
         max_lines=getattr(args, "max_lines", 2),
         max_line_length=getattr(args, "max_line_length", 42),
@@ -5283,6 +5399,16 @@ Freud.
     assert select_for_semantic_review(muitos, muitos_tr, sample_pct=0.2, seed="job")[0] == com_amostra
     assert select_for_semantic_review(muitos, muitos_tr, sample_pct=0.2, seed="outro")[0] != com_amostra
 
+    # Revisão total é o padrão; o usuário barateia subindo o limiar.
+    padrao = JobConfig(source_path=Path("x.srt"))
+    assert padrao.semantic_review is True
+    assert padrao.semantic_min_signals == 0, "revisão total deve ser o padrão"
+    # com limiar 0 tudo entra, com limiar 1 só o que tem sinal
+    todos, _ = select_for_semantic_review(risco_cues, risco_tr, min_signals=0, sample_pct=0)
+    assert todos == [1, 2], todos
+    poucos, _ = select_for_semantic_review(risco_cues, risco_tr, min_signals=1, sample_pct=0)
+    assert poucos == [1], poucos
+
     print("self-test ok")
     return 0
 
@@ -5364,9 +5490,9 @@ def add_common_job_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--polish-pass", action="store_true", help="roda um segundo passe de revisão")
     parser.add_argument("--no-retry-qc-issues", action="store_true", help="não refaz automaticamente cues que falham no QC duro")
     parser.add_argument("--no-semantic-review", dest="semantic_review", action="store_false", help="desliga a revisao de sentido por LLM")
-    parser.add_argument("--semantic-min-signals", type=int, default=1, help="sinais de risco para entrar na revisao de sentido")
+    parser.add_argument("--semantic-min-signals", type=int, default=0, help="sinais de risco para entrar na revisao de sentido")
     parser.add_argument("--semantic-sample-pct", type=float, default=0.10, help="fracao sorteada alem das falas de risco")
-    parser.add_argument("--semantic-budget", type=int, default=600, help="teto de falas enviadas a revisao de sentido")
+    parser.add_argument("--semantic-budget", type=int, default=100000, help="teto de falas enviadas a revisao de sentido")
     parser.add_argument("--qc-repair-rounds", type=int, default=2)
     parser.add_argument("--max-lines", type=int, default=2)
     parser.add_argument("--max-line-length", type=int, default=42)

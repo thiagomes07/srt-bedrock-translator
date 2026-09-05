@@ -255,9 +255,14 @@ delas percebe um erro escrito em português impecável. `I have no authority to 
 "não tenho autoridade para isso" perde o sentido jurídico de negociar acordo e passa por tudo.
 
 Depois de traduzir, um segundo modelo lê pares de original e tradução e aponta **só** onde o
-sentido está errado. Não julga o filme inteiro: escolhe as falas com sinal de risco — negação,
-contraste, modal, número, variação grande de tamanho — mais uma amostra aleatória, porque só
-os sinais deixariam passar uma inversão que mantenha o tamanho. Custa cerca de 10% a mais.
+sentido está errado. Por padrão ele revisa o **filme inteiro**, o que custa cerca de 30% a mais
+e não deixa erro escapar. Para baratear, `--semantic-min-signals 1` restringe às falas com
+sinal de risco — negação, contraste, modal, número, variação grande de tamanho — mais uma
+amostra aleatória, por volta de 10% a mais.
+
+A fala acusada é refeita **sozinha**, com as vizinhas entrando apenas como leitura. Refazer o
+lote inteiro para consertar uma linha re-sortearia dezenas de traduções que estavam boas: numa
+medição, 60 falas marcadas fariam 60% do filme ser retraduzido.
 
 Um juiz sozinho erra muito: numa amostra real, metade das acusações era ruído, e ele chegou a
 marcar "errado" e explicar em seguida que o sentido estava preservado. Por isso a acusação só
