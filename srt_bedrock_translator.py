@@ -84,10 +84,12 @@ DEFAULT_MODELS = [
 SOFT_CONSENSUS_MODELS = 2
 
 # Quanto a traducao pode ficar mais lenta de ler que a fonte antes de virar aviso.
-CPS_REGRESSION_RATIO = 1.15
+# Medido num filme real: a expansao PT/EN tem mediana 0.97x e p90 1.19x, entao um
+# limiar de 1.15x ficava abaixo da variacao normal e marcava 8% do filme sem motivo.
+CPS_REGRESSION_RATIO = 1.35
 
 # Bump quando as regras de QC mudarem, para relatorios antigos serem recalculados.
-QUALITY_REPORT_VERSION = 2
+QUALITY_REPORT_VERSION = 3
 
 TIME_RE = re.compile(
     r"^\s*\d{1,2}:\d{2}:\d{2},\d{3}\s*-->\s*"
@@ -666,7 +668,15 @@ def smart_break_plain(text: str, max_line_length: int) -> str:
                 candidates.append((score, idx2))
     if not candidates:
         return text
-    _, split = min(candidates)
+    # Pontuacao ganha peso no score, mas nao pode ganhar de caber na linha: sem este
+    # filtro o corte "natural" era escolhido mesmo deixando um lado estourado.
+    viaveis = [
+        (score, idx)
+        for score, idx in candidates
+        if len(visible_text(text[:idx].strip())) <= max_line_length
+        and len(visible_text(text[idx:].strip())) <= max_line_length
+    ]
+    _, split = min(viaveis or candidates)
     left = text[:split].strip()
     right = text[split:].strip()
     if not left or not right:
@@ -677,16 +687,39 @@ def smart_break_plain(text: str, max_line_length: int) -> str:
 def apply_subtitle_formatting(text: str, max_line_length: int, max_lines: int) -> str:
     text = normalize_subtitle_text(text)
     lines = text.split("\n")
-    if len(lines) == 1 and line_lengths(text)[0] > max_line_length:
-        wrapper = re.match(r"^(<([ibu])>)(.*)(</\2>)$", text, flags=re.IGNORECASE | re.DOTALL)
-        if wrapper and "<" not in wrapper.group(3) and ">" not in wrapper.group(3):
-            inner = smart_break_plain(wrapper.group(3), max_line_length)
-            if len(inner.split("\n")) <= max_lines:
-                return wrapper.group(1) + inner + wrapper.group(4)
-        if "<" not in text and ">" not in text:
-            candidate = smart_break_plain(text, max_line_length)
-            if len(candidate.split("\n")) <= max_lines:
-                return candidate
+    lengths = line_lengths(text)
+    if len(lines) <= max_lines and all(length <= max_line_length for length in lengths):
+        return text
+
+    def melhor(candidato: str) -> bool:
+        novas = line_lengths(candidato)
+        if len(novas) > max_lines:
+            return False
+        if max(novas) <= max_line_length:
+            return True
+        # Corrigir excesso de linhas vale uma folga pequena no comprimento: legenda de
+        # 3 linhas cobre a imagem, enquanto 1 ou 2 caracteres a mais nao incomodam.
+        if len(lines) > max_lines:
+            return max(novas) <= max_line_length * 1.1
+        return max(novas) < max(lengths)
+
+    # Legenda de dois falantes usa hifen por linha. Juntar as linhas colaria as falas
+    # de duas pessoas numa so, entao esse caso fica intocado de proposito.
+    if any(line.lstrip().startswith("-") for line in lines):
+        return text
+
+    unida = " ".join(line.strip() for line in lines if line.strip())
+    if "<" not in text and ">" not in text:
+        candidate = smart_break_plain(unida, max_line_length)
+        return candidate if melhor(candidate) else text
+
+    # Um unico par de tags envolvendo o texto todo pode ser refluido por dentro.
+    wrapper = re.match(r"^(<([ibu])>)(.*)(</\2>)$", text, flags=re.IGNORECASE | re.DOTALL)
+    if wrapper and "<" not in wrapper.group(3) and ">" not in wrapper.group(3):
+        miolo = " ".join(part.strip() for part in wrapper.group(3).split("\n") if part.strip())
+        inner = smart_break_plain(miolo, max_line_length)
+        candidate = wrapper.group(1) + inner + wrapper.group(4)
+        return candidate if melhor(candidate) else text
     return text
 
 
@@ -907,18 +940,82 @@ def infer_movie_title(path: Path) -> dict[str, Any]:
     return {"title_guess": title or path.stem, "year_guess": year, "source_filename": path.name}
 
 
+FIM_DE_VALOR_JSON = re.compile(r'\s*(?:\}\s*[,\]]|,\s*")')
+
+
+def repair_json_text_values(raw: str) -> str:
+    """Escapa aspas soltas dentro dos valores de "text".
+
+    Legenda cita fala o tempo todo, e de vez em quando o modelo devolve a aspa
+    interna sem escapar, o que quebra o JSON inteiro por causa de um caractere.
+    Percorre cada valor ate o fechamento real (aspa seguida de , ou }) e escapa
+    o que estiver no meio.
+    """
+    out = []
+    i = 0
+    abertura = re.compile(r'"text"\s*:\s*"')
+    while True:
+        match = abertura.search(raw, i)
+        if not match:
+            out.append(raw[i:])
+            break
+        out.append(raw[i : match.end()])
+        j = match.end()
+        valor = []
+        while j < len(raw):
+            ch = raw[j]
+            if ch == "\\" and j + 1 < len(raw):
+                valor.append(raw[j : j + 2])
+                j += 2
+                continue
+            if ch == '"':
+                # Uma aspa so fecha o valor se o que vem depois so pode ser estrutura:
+                # fim do objeto seguido de , ou ], ou virgula seguida de outra chave.
+                # Sem esse rigor, texto como "supostos", Yancy? seria lido como fim.
+                if FIM_DE_VALOR_JSON.match(raw, j + 1):
+                    break
+                valor.append('\\"')
+                j += 1
+                continue
+            if ch == "\n":
+                valor.append("\\n")
+                j += 1
+                continue
+            valor.append(ch)
+            j += 1
+        out.append("".join(valor))
+        i = j
+    return "".join(out)
+
+
+def json_error_context(raw: str, exc: json.JSONDecodeError, span: int = 90) -> str:
+    pos = getattr(exc, "pos", 0) or 0
+    inicio = max(0, pos - span)
+    return f"...{raw[inicio:pos]}>>>AQUI>>>{raw[pos : pos + span]}..."
+
+
 def extract_json_object(text: str) -> Any:
     raw = text.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"\s*```$", "", raw, flags=re.IGNORECASE)
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as primeiro_erro:
         start = raw.find("{")
         end = raw.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(raw[start : end + 1])
-        raise
+        recorte = raw[start : end + 1] if start >= 0 and end > start else raw
+        try:
+            return json.loads(recorte)
+        except json.JSONDecodeError as erro:
+            # Antes de queimar uma chamada nova, tenta consertar o caso comum de
+            # aspa nao escapada. So aceita se o resultado virar JSON valido.
+            try:
+                return json.loads(repair_json_text_values(recorte))
+            except json.JSONDecodeError:
+                pass
+            raise ContractError(
+                f"JSON invalido: {erro.msg} na posicao {erro.pos}. Trecho: {json_error_context(recorte, erro)}"
+            ) from primeiro_erro
 
 
 def validate_context_payload(payload: Any) -> dict[str, Any]:
