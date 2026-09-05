@@ -1176,6 +1176,7 @@ class TranslatorJob:
         self.context_path = self.job_dir / "context.json"
         self.stop_path = self.job_dir / "STOP"
         self._stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
         self.doc: SrtDocument | None = None
         self.batches: list[Batch] = []
         self.translations: dict[str, dict[str, Any]] = load_json(self.translations_path, {})
@@ -1261,6 +1262,9 @@ class TranslatorJob:
         existing["quality_report_path"] = str(self.job_dir / "quality_report.json")
         existing["total_cues"] = len(self.doc.cues)
         existing["total_batches"] = len(self.batches)
+        existing["completed_batches"] = sorted(
+            batch.number for batch in self.batches if self.batch_done(batch)
+        )
         if isinstance(existing.get("current"), dict):
             existing["current"]["total_batches"] = len(self.batches)
         atomic_write_json(self.config_path, config_to_json(self.config))
@@ -1309,6 +1313,19 @@ class TranslatorJob:
         state["last_written_output"] = str(output_path)
         self.save_state(state)
         return output_path
+
+    def try_write_output(self, state: dict[str, Any], final: bool = False) -> Path | None:
+        try:
+            return self.write_output(state, final=final)
+        except Exception as exc:
+            write_error = f"{exc.__class__.__name__}: {exc}"
+            previous = str(state.get("last_error") or "").strip()
+            state["last_error"] = (previous + " | " if previous else "") + f"Falha escrevendo arquivo SRT: {write_error}"
+            state["output_write_error"] = write_error
+            state["traceback"] = traceback.format_exc()[-6000:]
+            self.save_state(state)
+            self.logger.event("ERROR", "Falha escrevendo arquivo SRT.", error=write_error[:1000])
+            return None
 
     def write_quality_report(self, state: dict[str, Any]) -> dict[str, Any]:
         assert self.doc is not None
@@ -1382,7 +1399,7 @@ class TranslatorJob:
         except JobStopped:
             state["status"] = "stopped"
             state["last_error"] = "Parado pelo usuario."
-            self.write_output(state, final=False)
+            self.try_write_output(state, final=False)
             self.save_state(state)
             self.logger.event("WARN", "Trabalho parado; pode ser retomado depois.", status="stopped")
             return state
@@ -1390,7 +1407,7 @@ class TranslatorJob:
             state["status"] = "failed"
             state["last_error"] = f"{exc.__class__.__name__}: {exc}"
             state["traceback"] = traceback.format_exc()[-6000:]
-            self.write_output(state, final=False)
+            self.try_write_output(state, final=False)
             self.save_state(state)
             self.logger.event("ERROR", "Trabalho falhou.", status="failed", error=str(exc)[:1000])
             raise
@@ -1515,6 +1532,15 @@ class TranslatorJob:
                 if not polish:
                     completed.add(batch.number)
                     state["completed_batches"] = sorted(completed)
+                self.write_quality_report(state)
+                self.save_state(state)
+                self.logger.event(
+                    "INFO",
+                    "Traducoes do lote persistidas; atualizando SRT parcial.",
+                    batch=batch.number,
+                    done=self.count_done(),
+                    total=len(self.doc.cues),
+                )
                 self.write_output(state, final=False)
                 self.logger.event(
                     "INFO",
@@ -1941,6 +1967,20 @@ RUNNERS: dict[str, TranslatorJob] = {}
 RUNNERS_LOCK = threading.RLock()
 
 
+def runner_alive(job_id: Any) -> bool:
+    if not job_id:
+        return False
+    with RUNNERS_LOCK:
+        runner = RUNNERS.get(str(job_id))
+        if not runner:
+            return False
+        thread = getattr(runner, "thread", None)
+        if thread and thread.is_alive():
+            return True
+        RUNNERS.pop(str(job_id), None)
+        return False
+
+
 def list_srt_files(base: Path) -> list[dict[str, Any]]:
     out = []
     def sort_key(path: Path) -> tuple[int, int, int, str]:
@@ -1989,12 +2029,18 @@ def compact_state(state: dict[str, Any]) -> dict[str, Any]:
     done = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "ok")
     current = state.get("current") or {}
     quality_summary = quality.get("summary", state.get("quality", {})) if isinstance(quality, dict) else state.get("quality", {})
+    stored_status = state.get("status")
+    is_alive = runner_alive(state.get("job_id"))
+    stale_running = stored_status == "running" and not is_alive
     return {
         "job_id": state.get("job_id"),
-        "status": state.get("status"),
+        "status": "stalled" if stale_running else stored_status,
+        "stored_status": stored_status,
+        "runner_alive": is_alive,
+        "stale_running": stale_running,
         "source_path": state.get("source_path"),
         "output": state.get("final_output_path") or state.get("last_written_output"),
-        "last_error": state.get("last_error"),
+        "last_error": state.get("last_error") or ("Processo de traducao nao esta ativo; use Retomar para continuar." if stale_running else None),
         "updated_at": state.get("updated_at"),
         "total_cues": total,
         "done_cues": done if total and done <= total else done,
@@ -2052,6 +2098,16 @@ def find_job_dir(base: Path, job_id: str) -> Path | None:
 def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
     state = load_json(job_dir / "state.json", {})
     state["job_dir"] = str(job_dir)
+    stored_status = state.get("status")
+    is_alive = runner_alive(state.get("job_id") or job_dir.name)
+    stale_running = stored_status == "running" and not is_alive
+    state["stored_status"] = stored_status
+    state["runner_alive"] = is_alive
+    state["stale_running"] = stale_running
+    if stale_running:
+        state["status"] = "stalled"
+        if not state.get("last_error"):
+            state["last_error"] = "Processo de traducao nao esta ativo; use Retomar para continuar."
     translations = load_json(job_dir / "translations.json", {})
     state["done_cues"] = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "ok")
     quality = load_json(job_dir / "quality_report.json", {})
@@ -2263,22 +2319,32 @@ class UIHandler(BaseHTTPRequestHandler):
 
 
 def start_job_thread(job: TranslatorJob) -> None:
-    with RUNNERS_LOCK:
-        existing = RUNNERS.get(job.job_id)
-        if existing and not existing.stopped():
-            return
-        RUNNERS[job.job_id] = job
-
     def target() -> None:
         try:
             job.run()
-        except Exception:
-            pass
+        except Exception as exc:
+            try:
+                job.logger.event(
+                    "ERROR",
+                    "Runner terminou com excecao nao tratada.",
+                    status="failed",
+                    error=f"{exc.__class__.__name__}: {exc}"[:1000],
+                )
+            except Exception:
+                pass
         finally:
             with RUNNERS_LOCK:
-                RUNNERS.pop(job.job_id, None)
+                if RUNNERS.get(job.job_id) is job:
+                    RUNNERS.pop(job.job_id, None)
 
     thread = threading.Thread(target=target, name=f"srt-job-{job.job_id}", daemon=True)
+    job.thread = thread
+    with RUNNERS_LOCK:
+        existing = RUNNERS.get(job.job_id)
+        existing_thread = getattr(existing, "thread", None) if existing else None
+        if existing_thread and existing_thread.is_alive():
+            return
+        RUNNERS[job.job_id] = job
     thread.start()
 
 
