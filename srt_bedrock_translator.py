@@ -56,13 +56,15 @@ TIME_RE = re.compile(
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 
 REFUSAL_RE = re.compile(
-    r"\b("
-    r"i\s*(?:am|'m|cannot|can't|can not|won't)|"
-    r"sorry|unable to|not able to|cannot comply|"
-    r"nao posso|não posso|nao consigo|não consigo|"
-    r"nao tenho permissao|não tenho permissao|não tenho permissão|"
-    r"violates|copyright|direitos autorais"
-    r")\b",
+    r"("
+    r"\b(?:as an ai|as a language model|como (?:modelo|uma ia|um assistente)|sou uma ia)\b|"
+    r"\b(?:i(?:'m| am) sorry|sorry|desculpe|lamento)\b.{0,140}"
+    r"\b(?:can't|cannot|can not|unable|not able|nao posso|não posso|nao consigo|não consigo)\b.{0,140}"
+    r"\b(?:translate|traduzir|lyrics?|letras?|copyright|direitos autorais|request|pedido|policy|politica|política)\b|"
+    r"\b(?:can't|cannot|can not|unable to|not able to|nao posso|não posso|nao consigo|não consigo)\b.{0,140}"
+    r"\b(?:translate|traduzir|lyrics?|letras?|copyright|direitos autorais|request|pedido)\b|"
+    r"\b(?:violates?|viola)\b.{0,140}\b(?:copyright|direitos autorais|policy|politica|política)\b"
+    r")",
     re.IGNORECASE,
 )
 ENGLISH_STOPWORDS = {
@@ -310,8 +312,8 @@ class JobConfig:
     profile: str = DEFAULT_PROFILE
     region: str = DEFAULT_REGION
     models: list[str] = field(default_factory=lambda: list(DEFAULT_MODELS))
-    batch_size: int = 36
-    max_batch_chars: int = 5200
+    batch_size: int = 28
+    max_batch_chars: int = 4300
     context_batches: int = 1
     attempts_per_model: int = 3
     base_backoff: float = 3.0
@@ -390,6 +392,7 @@ class JsonLogger:
                         "status",
                         "sleep",
                         "error",
+                        "max_tokens",
                     }
                 }
                 if small:
@@ -654,6 +657,7 @@ def build_quality_report(
     counts = {"error": 0, "warning": 0}
     error_cue_ids: set[int] = set()
     warning_cue_ids: set[int] = set()
+    pending_cue_ids: set[int] = set()
     for cue in cues:
         issues = cue_quality_issues(
             cue,
@@ -665,12 +669,17 @@ def build_quality_report(
         )
         if issues:
             severities = {item["severity"] for item in issues}
-            if "error" in severities:
+            codes = {item.get("code") for item in issues}
+            cue_status = (translations.get(str(cue.id)) or {}).get("status")
+            is_pending = codes == {"not_ok"} and cue_status in {None, "", "pending"}
+            if is_pending:
+                pending_cue_ids.add(cue.id)
+            elif "error" in severities:
                 error_cue_ids.add(cue.id)
             if "warning" in severities:
                 warning_cue_ids.add(cue.id)
             for item in issues:
-                if item["severity"] in counts:
+                if not is_pending and item["severity"] in counts:
                     counts[item["severity"]] += 1
             cue_reports.append(
                 {
@@ -681,7 +690,7 @@ def build_quality_report(
                 }
             )
     total = len(cues)
-    ok = total - len(error_cue_ids)
+    ok = total - len(error_cue_ids) - len(pending_cue_ids)
     return {
         "created_at": utc_now(),
         "thresholds": {
@@ -693,11 +702,13 @@ def build_quality_report(
             "total_cues": total,
             "ok_cues": ok,
             "error_cues": len(error_cue_ids),
+            "pending_cues": len(pending_cue_ids),
             "warning_cues": len(warning_cue_ids),
             "error_count": counts["error"],
             "warning_count": counts["warning"],
         },
         "error_cue_ids": sorted(error_cue_ids),
+        "pending_cue_ids": sorted(pending_cue_ids),
         "warning_cue_ids": sorted(warning_cue_ids),
         "cues": cue_reports,
     }
@@ -768,16 +779,72 @@ def extract_json_object(text: str) -> Any:
         raise
 
 
+def validate_context_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ContractError("Contexto nao e objeto JSON.")
+    required = ["title_guess", "source_language", "tone", "style_guide_ptbr", "names_and_terms", "continuity_notes"]
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ContractError(f"Contexto sem campos obrigatorios: {missing}.")
+    if not isinstance(payload.get("style_guide_ptbr"), list) or not payload["style_guide_ptbr"]:
+        raise ContractError("Contexto sem style_guide_ptbr util.")
+    if not isinstance(payload.get("names_and_terms"), list):
+        raise ContractError("Contexto names_and_terms invalido.")
+    if not isinstance(payload.get("continuity_notes"), list):
+        raise ContractError("Contexto continuity_notes invalido.")
+    return payload
+
+
+def context_is_usable(context: Any) -> bool:
+    if not isinstance(context, dict):
+        return False
+    if context.get("_fallback"):
+        return False
+    notes = " ".join(str(item) for item in context.get("continuity_notes", []))
+    if "Context pass falhou" in notes:
+        return False
+    try:
+        validate_context_payload(context)
+        return True
+    except ContractError:
+        return False
+
+
 def text_has_refusal(text: str) -> bool:
     return bool(REFUSAL_RE.search(text or ""))
 
 
+def looks_like_repeated_name_or_token(text: str) -> bool:
+    cleaned = strip_tags(text)
+    words = re.findall(r"[A-Za-z][A-Za-z'.-]*", cleaned)
+    if not words:
+        return False
+    lowered = [word.lower().strip("'-.") for word in words]
+    unique = {word for word in lowered if word}
+    if len(words) > 1 and 1 <= len(unique) <= 2:
+        return all(
+            original[:1].isupper()
+            and lowered_word not in ENGLISH_STOPWORDS
+            and len(lowered_word) >= 2
+            for original, lowered_word in zip(words, lowered)
+        )
+    if len(words) == 1:
+        original = words[0]
+        lowered_word = lowered[0]
+        return original[:1].isupper() and lowered_word not in ENGLISH_STOPWORDS and len(lowered_word) >= 2
+    return False
+
+
 def looks_untranslated(source: str, translated: str) -> bool:
-    src = re.sub(r"<[^>]+>", "", source).strip().lower()
-    out = re.sub(r"<[^>]+>", "", translated).strip().lower()
+    source_plain = re.sub(r"<[^>]+>", "", source).strip()
+    translated_plain = re.sub(r"<[^>]+>", "", translated).strip()
+    src = source_plain.lower()
+    out = translated_plain.lower()
     if not src or not out:
         return False
     src_words = re.findall(r"[a-z']{2,}", src)
+    if src == out and looks_like_repeated_name_or_token(source_plain):
+        return False
     if src == out and len(src_words) >= 4 and re.search(r"[a-z]{4,}", src):
         return True
     words = re.findall(r"[a-z']{2,}", out)
@@ -1122,9 +1189,16 @@ class TranslatorJob:
             return state
 
         existing["updated_at"] = utc_now()
+        existing["profile"] = self.config.profile or existing.get("profile", DEFAULT_PROFILE)
+        existing["region"] = self.config.region or existing.get("region", DEFAULT_REGION)
         existing["models"] = self.config.models or existing.get("models", DEFAULT_MODELS)
+        existing["batch_size"] = self.config.batch_size
+        existing["max_batch_chars"] = self.config.max_batch_chars
+        existing["context_batches"] = self.config.context_batches
         existing["retry_forever"] = self.config.retry_forever
         existing["attempts_per_model"] = self.config.attempts_per_model
+        existing["context_pass"] = self.config.context_pass
+        existing["polish_pass"] = self.config.polish_pass
         existing["retry_qc_issues"] = self.config.retry_qc_issues
         existing["qc_repair_rounds"] = self.config.qc_repair_rounds
         existing["max_lines"] = self.config.max_lines
@@ -1133,6 +1207,9 @@ class TranslatorJob:
         existing["quality_report_path"] = str(self.job_dir / "quality_report.json")
         existing["total_cues"] = len(self.doc.cues)
         existing["total_batches"] = len(self.batches)
+        if isinstance(existing.get("current"), dict):
+            existing["current"]["total_batches"] = len(self.batches)
+        atomic_write_json(self.config_path, config_to_json(self.config))
         self.save_state(existing)
         self.logger.event("INFO", "Trabalho existente carregado para retomada.", total=len(self.doc.cues), total_batches=len(self.batches))
         return existing
@@ -1266,35 +1343,36 @@ class TranslatorJob:
 
     def ensure_context_pack(self, client: BedrockClient, state: dict[str, Any]) -> None:
         if self.context_path.exists():
-            state["context"] = load_json(self.context_path, {})
-            self.save_state(state)
-            return
+            context = load_json(self.context_path, {})
+            if context_is_usable(context):
+                state["context"] = context
+                self.save_state(state)
+                return
+            self.logger.event("WARN", "Contexto existente nao passou na validacao; vou recria-lo.", error="contexto ausente, generico ou truncado")
         assert self.doc is not None
         self.logger.event("INFO", "Criando contexto do filme a partir do nome e de amostras da legenda.")
         system = (
             "Voce prepara guias de traducao audiovisual para portugues brasileiro. "
             "Use apenas os dados fornecidos. Se algo nao estiver claro, marque como inferencia ou desconhecido. "
-            "Retorne somente JSON valido."
+            "Retorne somente JSON valido, curto, sem markdown, sem texto antes ou depois."
         )
         samples = collect_samples(self.doc.cues)
         prompt = {
-            "task": "Prepare um guia curto para traduzir esta legenda SRT para portugues brasileiro natural e contextualizado.",
+            "task": "Prepare um guia curto e pratico para traduzir esta legenda SRT para portugues brasileiro natural e contextualizado.",
             "movie_metadata_from_path": infer_movie_title(self.source_path),
             "rules": [
                 "Nao invente sinopse externa.",
-                "Identifique nomes recorrentes, relacoes aparentes, tom, registro e escolhas de tratamento.",
-                "Inclua orientacoes para musicas legendadas, palavroes, humor, ironia e continuidade.",
+                "Identifique nomes recorrentes, relacoes aparentes, tom, registro e escolhas de tratamento apenas quando a amostra permitir.",
+                "Inclua no maximo 8 orientacoes praticas para musicas legendadas, palavroes, humor, ironia e continuidade.",
+                "Use strings curtas. Limite names_and_terms a 20 itens e continuity_notes a 10 itens.",
                 "Se houver duvida, prefira diretrizes conservadoras.",
             ],
-            "return_contract": {
-                "title_guess": "string",
-                "year_guess": "string|null",
-                "source_language": "string",
-                "tone": "string",
-                "style_guide_ptbr": ["string"],
-                "names_and_terms": [{"source": "string", "ptbr": "string", "note": "string"}],
-                "continuity_notes": ["string"],
-            },
+            "response_format_required": (
+                '{"title_guess":"...","year_guess":"...","source_language":"...",'
+                '"tone":"...","style_guide_ptbr":["..."],'
+                '"names_and_terms":[{"source":"...","ptbr":"...","note":"..."}],'
+                '"continuity_notes":["..."]}'
+            ),
             "subtitle_samples": samples,
         }
         try:
@@ -1303,13 +1381,13 @@ class TranslatorJob:
                 state,
                 system,
                 json.dumps(prompt, ensure_ascii=False, indent=2),
-                max_tokens=1800,
+                max_tokens=4200,
                 temperature=0.15,
                 stage="context",
+                max_cycles=2,
             )
             context = extract_json_object(text)
-            if not isinstance(context, dict):
-                raise ContractError("Contexto retornado nao e objeto.")
+            context = validate_context_payload(context)
             context["_model"] = model
         except Exception as exc:
             context = {
@@ -1324,6 +1402,7 @@ class TranslatorJob:
                 ],
                 "names_and_terms": [],
                 "continuity_notes": [f"Context pass falhou: {exc}"],
+                "_fallback": True,
             }
             self.logger.event("WARN", "Nao consegui criar contexto via LLM; usando guia generico.", error=str(exc)[:500])
         atomic_write_json(self.context_path, context)
@@ -1513,9 +1592,11 @@ class TranslatorJob:
         stage: str,
         batch: int | None = None,
         validator: Any | None = None,
+        max_cycles: int | None = None,
     ) -> tuple[str, dict[str, Any], str]:
         cycle = 0
         last_error = ""
+        current_max_tokens = max_tokens
         while True:
             cycle += 1
             for model in self.config.models:
@@ -1540,20 +1621,23 @@ class TranslatorJob:
                         batch=batch,
                         model=model,
                         attempt=attempt,
+                        max_tokens=current_max_tokens,
                     )
                     try:
                         raw, meta = client.converse(
                             model,
                             system,
                             prompt,
-                            max_tokens=max_tokens,
+                            max_tokens=current_max_tokens,
                             temperature=temperature,
                         )
                         raw_excerpt = raw[:800]
-                        if text_has_refusal(raw):
-                            raise ContractError("Resposta parece recusa, nao traducao no contrato.")
+                        if meta.get("stopReason") == "max_tokens":
+                            raise ContractError("Resposta cortada pelo limite max_tokens.")
                         if validator is not None:
                             validator(raw)
+                        elif text_has_refusal(raw):
+                            raise ContractError("Resposta parece recusa, nao traducao no contrato.")
                         self.logger.event("INFO", "Resposta validada.", batch=batch, model=model, attempt=attempt)
                         return raw, meta, model
                     except BedrockCallError as exc:
@@ -1579,6 +1663,8 @@ class TranslatorJob:
                             attempt=attempt,
                             error=(last_error + (f" | resposta={raw_excerpt}" if raw_excerpt else ""))[:1200],
                         )
+                        if "max_tokens" in last_error:
+                            current_max_tokens = min(12000, max(current_max_tokens + 1000, int(current_max_tokens * 1.5)))
                     sleep = min(self.config.max_backoff, self.config.base_backoff * (2 ** (attempt - 1)))
                     sleep = sleep + random.uniform(0, min(2.0, sleep * 0.2))
                     self.sleep_or_stop(sleep)
@@ -1587,6 +1673,8 @@ class TranslatorJob:
                     "Todos os modelos configurados ficaram indisponiveis para esta conta/regiao. "
                     "Verifique acesso no console do Amazon Bedrock em Model access, ou troque a lista de modelos."
                 )
+            if max_cycles is not None and cycle >= max_cycles:
+                raise RuntimeError(f"Falha apos {cycle} ciclo(s) de modelos. Ultimo erro: {last_error}")
             if self.config.retry_forever:
                 sleep = min(self.config.max_backoff, self.config.base_backoff * (2 ** min(cycle, 6)))
                 self.logger.event(
@@ -1626,7 +1714,7 @@ def config_to_json(config: JobConfig) -> dict[str, Any]:
     return out
 
 
-def collect_samples(cues: list[SrtCue], per_window: int = 30) -> list[dict[str, Any]]:
+def collect_samples(cues: list[SrtCue], per_window: int = 18) -> list[dict[str, Any]]:
     if not cues:
         return []
     anchors = [0, max(0, len(cues) // 3), max(0, (len(cues) * 2) // 3), max(0, len(cues) - per_window)]
@@ -1638,7 +1726,7 @@ def collect_samples(cues: list[SrtCue], per_window: int = 30) -> list[dict[str, 
                 continue
             seen.add(cue.id)
             samples.append(cue.as_prompt_item(include_time=True))
-    return samples[:120]
+    return samples[:72]
 
 
 def prompt_json(data: Any) -> str:
@@ -1744,7 +1832,7 @@ def build_polish_prompt(job: TranslatorJob, batch: Batch) -> tuple[str, str]:
 
 def estimate_max_tokens(batch: Batch, *, polish: bool = False) -> int:
     chars = sum(len(cue.text) for cue in batch.cues)
-    return max(1200, min(7000, int(chars / 2.2) + len(batch.cues) * 38 + (800 if polish else 1200)))
+    return max(1800, min(9000, int(chars * 1.6) + len(batch.cues) * 70 + (1200 if polish else 1800)))
 
 
 def discover_resume_source(path: Path) -> Path:
@@ -1765,8 +1853,8 @@ def build_config_from_args(args: argparse.Namespace) -> JobConfig:
         profile=getattr(args, "profile", DEFAULT_PROFILE),
         region=getattr(args, "region", DEFAULT_REGION),
         models=models,
-        batch_size=getattr(args, "batch_size", 36),
-        max_batch_chars=getattr(args, "max_batch_chars", 5200),
+        batch_size=getattr(args, "batch_size", 28),
+        max_batch_chars=getattr(args, "max_batch_chars", 4300),
         context_batches=getattr(args, "context_batches", 1),
         attempts_per_model=getattr(args, "attempts_per_model", 3),
         base_backoff=getattr(args, "base_backoff", 3.0),
@@ -1787,8 +1875,12 @@ def build_config_from_args(args: argparse.Namespace) -> JobConfig:
     )
 
 
-def parse_models(value: str) -> list[str]:
-    return [part.strip() for part in re.split(r"[,;\n]", value) if part.strip()]
+def parse_models(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return [part.strip() for part in re.split(r"[,;\n]", str(value)) if part.strip()]
 
 
 RUNNERS: dict[str, TranslatorJob] = {}
@@ -1797,7 +1889,14 @@ RUNNERS_LOCK = threading.RLock()
 
 def list_srt_files(base: Path) -> list[dict[str, Any]]:
     out = []
-    for path in sorted(base.rglob("*.srt")):
+    def sort_key(path: Path) -> tuple[int, int, int, str]:
+        rel = safe_rel(path, base)
+        name = path.name.lower()
+        depth = len(Path(rel).parts)
+        sdh = 1 if re.search(r"(\b|[._-])sdh(\b|[._-])", name) else 0
+        return (depth, sdh, len(rel), rel.lower())
+
+    for path in sorted(base.rglob("*.srt"), key=sort_key):
         if ".srt_translator_jobs" in path.parts:
             continue
         try:
@@ -1831,10 +1930,11 @@ def compact_state(state: dict[str, Any]) -> dict[str, Any]:
     total = int(state.get("total_cues") or 0)
     translations = load_json(Path(state.get("job_dir", "")) / "translations.json", {}) if state.get("job_dir") else {}
     quality = load_json(Path(state.get("job_dir", "")) / "quality_report.json", {}) if state.get("job_dir") else {}
+    if state.get("job_dir"):
+        quality = ensure_quality_report_current(Path(state["job_dir"]), state, translations, quality)
     done = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "ok")
-    if not done:
-        done = len(state.get("completed_batches", []))
     current = state.get("current") or {}
+    quality_summary = quality.get("summary", state.get("quality", {})) if isinstance(quality, dict) else state.get("quality", {})
     return {
         "job_id": state.get("job_id"),
         "status": state.get("status"),
@@ -1844,12 +1944,47 @@ def compact_state(state: dict[str, Any]) -> dict[str, Any]:
         "updated_at": state.get("updated_at"),
         "total_cues": total,
         "done_cues": done if total and done <= total else done,
+        "pending_cues": quality_summary.get("pending_cues", max(0, total - done) if total else 0),
         "total_batches": state.get("total_batches"),
         "completed_batches": len(state.get("completed_batches", [])),
         "current": current,
         "usage": state.get("usage", {}),
-        "quality": quality.get("summary", state.get("quality", {})) if isinstance(quality, dict) else state.get("quality", {}),
+        "quality": quality_summary,
     }
+
+
+def ensure_quality_report_current(
+    job_dir: Path,
+    state: dict[str, Any],
+    translations: dict[str, Any],
+    quality: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    quality = quality or {}
+    summary = quality.get("summary") if isinstance(quality, dict) else None
+    if isinstance(summary, dict) and "pending_cues" in summary:
+        return quality
+    source = state.get("source_path")
+    if not source or not Path(source).exists():
+        return quality or {}
+    try:
+        doc = SrtDocument.load(Path(source))
+        protected = detect_spelling_variant_tokens(doc.cues)
+        protected_by_id = {
+            cue.id: sorted({token for token in capitalized_tokens(cue.text) if token in protected})
+            for cue in doc.cues
+        }
+        report = build_quality_report(
+            doc.cues,
+            translations,
+            max_lines=int(state.get("max_lines") or 2),
+            max_line_length=int(state.get("max_line_length") or 42),
+            max_cps=float(state.get("max_cps") or 17.0),
+            protected_tokens_by_id=protected_by_id,
+        )
+        atomic_write_json(job_dir / "quality_report.json", report)
+        return report
+    except Exception:
+        return quality or {}
 
 
 def find_job_dir(base: Path, job_id: str) -> Path | None:
@@ -1866,13 +2001,16 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
     translations = load_json(job_dir / "translations.json", {})
     state["done_cues"] = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "ok")
     quality = load_json(job_dir / "quality_report.json", {})
+    quality = ensure_quality_report_current(job_dir, state, translations, quality)
     if quality:
         state["quality"] = quality.get("summary", {})
         state["error_cues"] = quality.get("summary", {}).get("error_cues", 0)
+        state["pending_cues"] = quality.get("summary", {}).get("pending_cues", 0)
         state["warning_cues"] = quality.get("summary", {}).get("warning_cues", 0)
         state["quality_report_path"] = str(job_dir / "quality_report.json")
     else:
         state["error_cues"] = sum(1 for rec in translations.values() if isinstance(rec, dict) and rec.get("status") == "error")
+        state["pending_cues"] = max(0, int(state.get("total_cues") or 0) - int(state.get("done_cues") or 0))
         state["warning_cues"] = 0
     state["log_tail"] = JsonLogger(job_dir, echo=False).tail(240)
     state["preview"] = preview_current(job_dir, state, translations)
@@ -1891,7 +2029,7 @@ def preview_current(job_dir: Path, state: dict[str, Any], translations: dict[str
     batch_no = current.get("batch")
     if not batch_no:
         return {}
-    batches = make_batches(doc.cues, int(state.get("batch_size") or 36), int(state.get("max_batch_chars") or 5200))
+    batches = make_batches(doc.cues, int(state.get("batch_size") or 28), int(state.get("max_batch_chars") or 4300))
     if not (1 <= int(batch_no) <= len(batches)):
         return {}
     batch = batches[int(batch_no) - 1]
@@ -1976,8 +2114,8 @@ class UIHandler(BaseHTTPRequestHandler):
                     profile=data.get("profile") or DEFAULT_PROFILE,
                     region=data.get("region") or DEFAULT_REGION,
                     models=parse_models(data.get("models") or ",".join(DEFAULT_MODELS)),
-                    batch_size=int(data.get("batch_size") or 36),
-                    max_batch_chars=int(data.get("max_batch_chars") or 5200),
+                    batch_size=int(data.get("batch_size") or 28),
+                    max_batch_chars=int(data.get("max_batch_chars") or 4300),
                     context_batches=int(data.get("context_batches") or 1),
                     attempts_per_model=int(data.get("attempts_per_model") or 3),
                     retry_forever=bool(data.get("retry_forever", True)),
@@ -1992,9 +2130,8 @@ class UIHandler(BaseHTTPRequestHandler):
                     force_new=bool(data.get("force_new", False)),
                 )
                 job = TranslatorJob(cfg)
-                state = job.init_or_load()
                 start_job_thread(job)
-                self.send_json({"job_id": job.job_id, "state": compact_state({**state, "job_dir": str(job.job_dir)})})
+                self.send_json({"job_id": job.job_id})
                 return
             if parsed.path == "/api/resume":
                 data = self.read_json()
@@ -2010,8 +2147,8 @@ class UIHandler(BaseHTTPRequestHandler):
                     profile=data.get("profile") or state.get("profile") or DEFAULT_PROFILE,
                     region=data.get("region") or state.get("region") or DEFAULT_REGION,
                     models=parse_models(data.get("models") or ",".join(state.get("models") or DEFAULT_MODELS)),
-                    batch_size=int(data.get("batch_size") or state.get("batch_size") or 36),
-                    max_batch_chars=int(data.get("max_batch_chars") or state.get("max_batch_chars") or 5200),
+                    batch_size=int(data.get("batch_size") or state.get("batch_size") or 28),
+                    max_batch_chars=int(data.get("max_batch_chars") or state.get("max_batch_chars") or 4300),
                     context_batches=int(data.get("context_batches") or state.get("context_batches") or 1),
                     attempts_per_model=int(data.get("attempts_per_model") or state.get("attempts_per_model") or 3),
                     retry_forever=bool(data.get("retry_forever", state.get("retry_forever", True))),
@@ -2372,11 +2509,11 @@ UI_HTML = r"""<!doctype html>
         <div class="row">
           <div>
             <label for="batchSize">Legendas por lote</label>
-            <input id="batchSize" type="number" min="8" max="120" value="36">
+            <input id="batchSize" type="number" min="8" max="120" value="28">
           </div>
           <div>
             <label for="batchChars">Caracteres por lote</label>
-            <input id="batchChars" type="number" min="1500" max="16000" value="5200">
+            <input id="batchChars" type="number" min="1500" max="16000" value="4300">
           </div>
         </div>
         <div class="row">
@@ -2591,7 +2728,7 @@ UI_HTML = r"""<!doctype html>
       pill.textContent = job.status || "-";
       pill.className = "pill " + (job.status || "");
       const q = job.quality || {};
-      document.querySelector("#paths").textContent = `Fonte: ${job.source_path || "-"} | Saida: ${job.final_output_path || job.last_written_output || "-"} | QC avisos: ${job.warning_cues || q.warning_cues || 0} | Relatorio: ${job.quality_report_path || "-"}`;
+      document.querySelector("#paths").textContent = `Fonte: ${job.source_path || "-"} | Saida: ${job.final_output_path || job.last_written_output || "-"} | Pendentes: ${job.pending_cues || q.pending_cues || 0} | QC avisos: ${job.warning_cues || q.warning_cues || 0} | Relatorio: ${job.quality_report_path || "-"}`;
       document.querySelector("#lastError").textContent = job.last_error ? `Ultimo erro: ${job.last_error}` : "";
       const log = document.querySelector("#log");
       log.textContent = (job.log_tail || []).map(e => `[${e.ts || ""}] ${e.level || "INFO"} ${e.message || ""}${formatEvent(e)}`).join("\n");
@@ -2889,8 +3026,8 @@ def add_common_job_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--region", default=DEFAULT_REGION)
     parser.add_argument("--models", default=",".join(DEFAULT_MODELS), help="lista separada por virgula, ponto e virgula ou linha")
-    parser.add_argument("--batch-size", type=int, default=36)
-    parser.add_argument("--max-batch-chars", type=int, default=5200)
+    parser.add_argument("--batch-size", type=int, default=28)
+    parser.add_argument("--max-batch-chars", type=int, default=4300)
     parser.add_argument("--context-batches", type=int, default=1)
     parser.add_argument("--attempts-per-model", type=int, default=3)
     parser.add_argument("--base-backoff", type=float, default=3.0)
