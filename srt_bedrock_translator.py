@@ -4121,6 +4121,8 @@ UI_HTML = r"""<!doctype html>
     /* ---- seletor de arquivo ---- */
     .campo-nota { margin: 4px 0 0; font-size: 12px; color: #b45309; }
     select.ignorado { opacity: .5; }
+    .nota-existente { color: #1d4ed8; }
+    .nota-nova { color: #64748b; }
     .custo-vazio { margin: 0; font-size: 13px; color: #64748b; line-height: 1.5; }
     .path-row { display: flex; gap: 6px; }
     .path-row input { flex: 1; }
@@ -4461,6 +4463,7 @@ UI_HTML = r"""<!doctype html>
           <input id="path" placeholder="/caminho/arquivo.srt">
           <button id="procurar" type="button">Procurar...</button>
         </div>
+        <p id="origemStatus" class="campo-nota" hidden></p>
 
         <div class="row">
           <div>
@@ -4855,6 +4858,7 @@ UI_HTML = r"""<!doctype html>
     const defaultModels = __DEFAULT_MODELS__;
     let selectedJob = null;
     let lastStatus = {};
+    let ultimosJobs = [];
     let lastDone = null;
     let rateSamples = [];
     document.querySelector("#models").value = defaultModels.join("\n");
@@ -5027,8 +5031,32 @@ UI_HTML = r"""<!doctype html>
       const manual = document.querySelector("#path").value.trim();
       document.querySelector("#fileIgnorado").hidden = !manual;
       document.querySelector("#file").classList.toggle("ignorado", !!manual);
+
+      // "Iniciar ou retomar" faz coisas bem diferentes conforme já exista ou não um
+      // trabalho para esta legenda, e isso só dava para descobrir clicando.
+      const origem = manual || document.querySelector("#file").value;
+      const nota = document.querySelector("#origemStatus");
+      const anterior = origem
+        ? ultimosJobs.find(j => (j.source_path || "") === origem)
+        : null;
+      if (!origem) {
+        nota.hidden = true;
+        return;
+      }
+      nota.hidden = false;
+      if (anterior) {
+        const pct = anterior.total_cues
+          ? Math.round((anterior.done_cues || 0) * 100 / anterior.total_cues) : 0;
+        nota.className = "campo-nota nota-existente";
+        nota.innerHTML = `Já existe um trabalho para esta legenda (${escapeHtml(anterior.status || "-")}, ${pct}%). `
+          + `<b>Iniciar ou retomar</b> continua de onde parou, sem refazer o que já foi traduzido.`;
+      } else {
+        nota.className = "campo-nota nota-nova";
+        nota.textContent = "Legenda nova: Iniciar ou retomar começa uma tradução do zero e cria um trabalho na lista abaixo.";
+      }
     }
     document.querySelector("#path").addEventListener("input", sincronizarOrigem);
+    document.querySelector("#file").addEventListener("change", sincronizarOrigem);
 
     /* ---------- api ---------- */
     async function api(path, opts) {
@@ -5101,6 +5129,8 @@ UI_HTML = r"""<!doctype html>
         announceStatus(job);
       }
       if (!selectedJob && data.jobs[0]) selectedJob = data.jobs[0].job_id;
+      ultimosJobs = data.jobs;
+      sincronizarOrigem();
       syncButtons(data.jobs);
     }
     function syncButtons(jobs) {
