@@ -4119,6 +4119,9 @@ UI_HTML = r"""<!doctype html>
     #help .pin-hint { margin: 8px 0 0; font-size: 11px; color: var(--muted); }
 
     /* ---- seletor de arquivo ---- */
+    .campo-nota { margin: 4px 0 0; font-size: 12px; color: #b45309; }
+    select.ignorado { opacity: .5; }
+    .custo-vazio { margin: 0; font-size: 13px; color: #64748b; line-height: 1.5; }
     .path-row { display: flex; gap: 6px; }
     .path-row input { flex: 1; }
     .path-row button { white-space: nowrap; }
@@ -4451,6 +4454,7 @@ UI_HTML = r"""<!doctype html>
       <div class="panel-body">
         <label class="field-label" for="file">Legenda encontrada <button class="info" data-help="file" aria-label="Ajuda">i</button></label>
         <select id="file"></select>
+        <p id="fileIgnorado" class="campo-nota" hidden>Ignorada nesta partida — vale a legenda escolhida abaixo.</p>
 
         <label class="field-label" for="path">Ou escolha outra legenda <button class="info" data-help="path" aria-label="Ajuda">i</button></label>
         <div class="path-row">
@@ -4564,7 +4568,7 @@ UI_HTML = r"""<!doctype html>
 
       <div class="result" id="result"></div>
 
-      <div class="panel-body" id="custoWrap" hidden>
+      <div class="panel-body" id="custoWrap">
         <div class="sub-head">Consumo por modelo <button class="info" data-help="custo" aria-label="Ajuda">i</button></div>
         <div id="custo"></div>
       </div>
@@ -5011,10 +5015,20 @@ UI_HTML = r"""<!doctype html>
       if (escolher) {
         const caminho = escolher.dataset.escolher;
         document.querySelector("#path").value = caminho;
+        sincronizarOrigem();
         fecharNavegador();
         toast("Legenda selecionada", caminho.split("/").pop() + " — clique em Iniciar ou retomar para traduzir.", "success");
       }
     });
+
+    // O caminho manual vence o dropdown (ver formConfig). Sem sinal na tela, o
+    // dropdown continua mostrando a legenda antiga e parece que ela é a que vai rodar.
+    function sincronizarOrigem() {
+      const manual = document.querySelector("#path").value.trim();
+      document.querySelector("#fileIgnorado").hidden = !manual;
+      document.querySelector("#file").classList.toggle("ignorado", !!manual);
+    }
+    document.querySelector("#path").addEventListener("input", sincronizarOrigem);
 
     /* ---------- api ---------- */
     async function api(path, opts) {
@@ -5276,7 +5290,7 @@ UI_HTML = r"""<!doctype html>
         pathLine("Relatório", job.quality_report_path) +
         `<div class="pathline"><span class="pk">Números</span><span class="pv">${done}/${total} traduzidas &middot; ${job.pending_cues || q.pending_cues || 0} pendentes &middot; ${job.error_cues || 0} erros &middot; ${job.warning_cues || q.warning_cues || 0} avisos${usage.totalTokens ? ` &middot; ${Number(usage.totalTokens).toLocaleString("pt-BR")} tokens` : ""}${usage.cacheReadInputTokens ? ` (${Number(usage.cacheReadInputTokens).toLocaleString("pt-BR")} reaproveitados do cache)` : ""}</span></div>`;
 
-      renderCusto(job.cost);
+      renderCusto(job.cost, job.status);
       const err = document.querySelector("#lastError");
       const showErr = job.last_error && job.status !== "complete";
       err.className = "alert-line" + (showErr ? " show" : "");
@@ -5375,11 +5389,22 @@ UI_HTML = r"""<!doctype html>
       if (follow) box.scrollTop = box.scrollHeight;
     }
 
-    function renderCusto(custo) {
+    function renderCusto(custo, status) {
       const wrap = document.querySelector("#custoWrap");
       const linhas = (custo && custo.rows) || [];
-      wrap.hidden = linhas.length === 0;
-      if (!linhas.length) return;
+      wrap.hidden = false;
+      if (!linhas.length) {
+        // Sem linhas o painel sumia inteiro, e a área em branco parecia defeito.
+        // O consumo é gravado a cada chamada: quem não tem nenhuma ou rodou antes
+        // da medição existir fica sem dados, e são casos diferentes.
+        document.querySelector("#custo").innerHTML =
+          `<p class="custo-vazio">${
+            status === "complete"
+              ? "Esta tradução terminou antes da medição de tokens existir, então não há consumo gravado para ela. Traduções novas mostram aqui os tokens de cada modelo e o custo estimado."
+              : "Nenhuma chamada ao Bedrock ainda. Assim que o primeiro lote for traduzido, os tokens por modelo e o custo estimado aparecem aqui."
+          }</p>`;
+        return;
+      }
       const n = v => Number(v || 0).toLocaleString("pt-BR");
       const semPreco = linhas.filter(r => r.cost_usd === null).map(r => r.model);
       const fontes = [...new Set(linhas.map(r => r.price_source).filter(Boolean))];
