@@ -318,6 +318,27 @@ BUNDLED_PRICES: dict[str, dict[str, float]] = {
     "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
 }
 BUNDLED_PRICES_DATE = "2026-09-05"
+
+# Referência para o que a API de preços da AWS não publica. Valores por 1.000 tokens,
+# convertidos da tabela oficial da Anthropic (US$/milhão dividido por mil). A própria
+# Anthropic avisa que Bedrock é operado pela AWS e pode ter preço próprio, e que
+# endpoint regional (o prefixo us.) costuma ter 10% de acréscimo sobre o global —
+# por isso isto é referência, não preço final. Ajuste em srt_translator.local.json.
+REFERENCE_PRICES_URL = "https://platform.claude.com/docs/en/about-claude/pricing"
+REFERENCE_PRICES: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-6": {"input": 0.003, "output": 0.015, "cache_read": 0.0003, "cache_write": 0.00375},
+    "claude-sonnet-4-5": {"input": 0.003, "output": 0.015, "cache_read": 0.0003, "cache_write": 0.00375},
+    "claude-sonnet-5": {"input": 0.002, "output": 0.010, "cache_read": 0.0002, "cache_write": 0.0025},
+    "claude-haiku-4-5": {"input": 0.001, "output": 0.005, "cache_read": 0.0001, "cache_write": 0.00125},
+    "claude-opus-4-5": {"input": 0.005, "output": 0.025, "cache_read": 0.0005, "cache_write": 0.00625},
+    "claude-opus-4-6": {"input": 0.005, "output": 0.025, "cache_read": 0.0005, "cache_write": 0.00625},
+    "claude-opus-5": {"input": 0.005, "output": 0.025, "cache_read": 0.0005, "cache_write": 0.00625},
+}
+REFERENCE_PRICES_DATE = "2026-09-05"
+BCB_PTAX_URL = (
+    "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/"
+    "CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)"
+)
 PRICE_KEYS = ("input", "output", "cache_read", "cache_write")
 USAGE_TO_PRICE = {
     "inputTokens": "input",
@@ -347,6 +368,12 @@ def load_prices() -> dict[str, dict[str, Any]]:
     mostrar uma estimativa com cara de número oficial.
     """
     tabela: dict[str, dict[str, Any]] = {}
+    for chave, valores in REFERENCE_PRICES.items():
+        tabela[normalize_model_key(chave)] = {
+            **valores,
+            "_fonte": f"referência Anthropic de {REFERENCE_PRICES_DATE}; a AWS pode cobrar diferente",
+            "_referencia": True,
+        }
     for chave, valores in BUNDLED_PRICES.items():
         tabela[normalize_model_key(chave)] = {**valores, "_fonte": f"instantâneo AWS de {BUNDLED_PRICES_DATE}"}
     buscados = load_json(price_store_path(), {})
@@ -365,6 +392,43 @@ def load_prices() -> dict[str, dict[str, Any]]:
     return tabela
 
 
+def load_exchange_rate() -> dict[str, Any] | None:
+    """Cotação do dólar guardada em disco, com a data em que o Banco Central a publicou."""
+    manual = LOCAL_DEFAULTS.get("usd_brl")
+    if isinstance(manual, (int, float)) and manual > 0:
+        return {"rate": float(manual), "date": "definida por você", "source": "srt_translator.local.json"}
+    guardado = load_json(price_store_path(), {}).get("cambio")
+    if isinstance(guardado, dict) and guardado.get("rate"):
+        return guardado
+    return None
+
+
+def fetch_exchange_rate(timeout: int = 30) -> dict[str, Any] | None:
+    """Busca a cotação PTAX de venda no Banco Central, fonte oficial no Brasil."""
+    import urllib.request
+
+    hoje = _dt.datetime.now()
+    inicio = (hoje - _dt.timedelta(days=12)).strftime("%m-%d-%Y")
+    fim = hoje.strftime("%m-%d-%Y")
+    # OData do BCB recusa $ e @ percent-encoded, entao a query e montada a mao.
+    params = (
+        f"@dataInicial='{inicio}'&@dataFinalCotacao='{fim}'"
+        "&$top=1&$orderby=dataHoraCotacao%20desc&$format=json"
+        "&$select=cotacaoVenda,dataHoraCotacao"
+    )
+    try:
+        with urllib.request.urlopen(f"{BCB_PTAX_URL}?{params}", timeout=timeout) as resp:
+            dados = json.loads(resp.read().decode("utf-8"))
+        item = (dados.get("value") or [])[0]
+        return {
+            "rate": float(item["cotacaoVenda"]),
+            "date": str(item["dataHoraCotacao"])[:10],
+            "source": "PTAX de venda, Banco Central do Brasil",
+        }
+    except Exception:
+        return None
+
+
 def price_for_model(model_id: str, tabela: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     alvo = normalize_model_key(model_id)
     if not alvo:
@@ -377,7 +441,11 @@ def price_for_model(model_id: str, tabela: dict[str, dict[str, Any]]) -> dict[st
     return tabela[max(candidatos, key=len)]
 
 
-def estimate_cost(usage_by_model: dict[str, Any], tabela: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def estimate_cost(
+    usage_by_model: dict[str, Any],
+    tabela: dict[str, dict[str, Any]],
+    cambio: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Custo estimado por modelo. Modelo sem preço aparece com custo nulo e aviso."""
     linhas = []
     total = 0.0
@@ -402,11 +470,19 @@ def estimate_cost(usage_by_model: dict[str, Any], tabela: dict[str, dict[str, An
                 "cache_read": int(uso.get("cacheReadInputTokens", 0) or 0),
                 "cache_write": int(uso.get("cacheWriteInputTokens", 0) or 0),
                 "cost_usd": round(custo, 6) if preco else None,
+                "cost_brl": round(custo * float(cambio["rate"]), 4) if (preco and cambio) else None,
                 "price_source": preco.get("_fonte") if preco else None,
+                "price_is_reference": bool(preco.get("_referencia")) if preco else False,
             }
         )
         total += custo
-    return {"rows": linhas, "total_usd": round(total, 6), "complete": completo}
+    return {
+        "rows": linhas,
+        "total_usd": round(total, 6),
+        "total_brl": round(total * float(cambio["rate"]), 4) if cambio else None,
+        "complete": completo,
+        "exchange": cambio,
+    }
 
 
 def utc_now() -> str:
@@ -3452,7 +3528,7 @@ def state_for_job_dir(job_dir: Path) -> dict[str, Any]:
         and is_alive
         and (int(current.get("cycle") or 0) >= 2 or int(current.get("soft_failures") or 0) >= 3)
     )
-    state["cost"] = estimate_cost(state.get("usage_by_model") or {}, load_prices())
+    state["cost"] = estimate_cost(state.get("usage_by_model") or {}, load_prices(), load_exchange_rate())
     state["log_tail"] = JsonLogger(job_dir, echo=False).tail(240)
     state["preview"] = preview_current(job_dir, state, translations)
     state["compare"] = compare_recent(state, translations)
@@ -4070,6 +4146,8 @@ UI_HTML = r"""<!doctype html>
     .custo th:first-child, .custo td:first-child { text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
     .custo tfoot td { font-weight: 800; border-bottom: 0; border-top: 1px solid var(--line); }
     .custo .semPreco { color: var(--amber); font-weight: 700; }
+    .custo .brl { font-size: 11.5px; color: var(--muted); }
+    .custo .ref { font-size: 10.5px; color: var(--amber); }
     .custo-nota { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
     .paths { display: grid; gap: 7px; }
     .pathline { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
@@ -4589,7 +4667,7 @@ UI_HTML = r"""<!doctype html>
       custo: {
         t: "Consumo por modelo",
         p: "Quantas chamadas cada modelo atendeu, quantos tokens gastou e quanto isso custa em dólar. A entrada aparece separada do que veio do cache, que é cobrado por volta de um décimo.",
-        e: "O custo é <b>estimativa</b>, e a tabela diz de onde veio cada preço. Parte é buscada na API de preços da AWS pelo comando <code>refresh-prices</code>; parte vem de um instantâneo embutido.<br><br>A AWS não publica preço dos modelos Claude 4.x na API, então eles aparecem como <b>sem preço</b> até você informar. Consulte a página de preços do Bedrock e escreva em <code>srt_translator.local.json</code>:<br><code>{\"prices\": {\"us.anthropic.claude-sonnet-4-6\": {\"input\": 0.003, \"output\": 0.015}}}</code><br><br>Os valores são por mil tokens. Enquanto faltar preço de algum modelo, o total aparece com um sinal de mais, para você saber que ele está incompleto.",
+        e: "O custo é <b>estimativa</b>, e cada linha diz de onde veio o preço. Parte vem da API de preços da AWS, buscada pelo comando <code>refresh-prices</code>. A AWS não publica os Claude 4.x, então para eles usamos a <a href='https://platform.claude.com/docs/en/about-claude/pricing'>tabela oficial da Anthropic</a> — essas linhas aparecem marcadas como <b>referência</b>, porque a Anthropic avisa que a AWS opera o Bedrock e pode cobrar diferente, e que endpoint regional (o prefixo <code>us.</code>) costuma ter 10% de acréscimo.<br><br>Os valores em real usam a cotação PTAX de venda do Banco Central, buscada junto com os preços. Para fixar preço ou câmbio, escreva em <code>srt_translator.local.json</code>:<br><code>{\"usd_brl\": 5.20, \"prices\": {\"us.anthropic.claude-sonnet-4-6\": {\"input\": 0.003, \"output\": 0.015}}}</code><br><br>Preços por mil tokens. Se faltar o preço de algum modelo, o total aparece com um sinal de mais para avisar que está incompleto.",
         d: "Só olhe. Para o total ficar completo, informe o preço dos modelos que faltam."
       },
       arquivos: {
@@ -5119,6 +5197,10 @@ UI_HTML = r"""<!doctype html>
       const n = v => Number(v || 0).toLocaleString("pt-BR");
       const semPreco = linhas.filter(r => r.cost_usd === null).map(r => r.model);
       const fontes = [...new Set(linhas.map(r => r.price_source).filter(Boolean))];
+      const cambio = custo.exchange;
+      const brl = v => v === null || v === undefined
+        ? ""
+        : `<div class="brl">R$ ${Number(v).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>`;
       document.querySelector("#custo").innerHTML =
         `<table class="custo"><thead><tr>
            <th>modelo</th><th>chamadas</th><th>entrada</th><th>cache lido</th><th>saída</th><th>custo estimado</th>
@@ -5129,15 +5211,20 @@ UI_HTML = r"""<!doctype html>
             <td>${n(r.input)}</td>
             <td>${n(r.cache_read)}</td>
             <td>${n(r.output)}</td>
-            <td>${r.cost_usd === null ? "<span class='semPreco'>sem preço</span>" : "US$ " + r.cost_usd.toFixed(5)}</td>
+            <td>${r.cost_usd === null
+                  ? "<span class='semPreco'>sem preço</span>"
+                  : "US$ " + r.cost_usd.toFixed(5) + brl(r.cost_brl) + (r.price_is_reference ? "<div class='ref'>referência</div>" : "")}</td>
           </tr>`).join("") +
         `</tbody><tfoot><tr><td>total</td><td colspan="4"></td>
-           <td>US$ ${Number(custo.total_usd || 0).toFixed(5)}${custo.complete ? "" : "+"}</td></tr></tfoot></table>` +
+           <td>US$ ${Number(custo.total_usd || 0).toFixed(5)}${custo.complete ? "" : "+"}${brl(custo.total_brl)}</td></tr></tfoot></table>` +
         `<div class="custo-nota">${
           semPreco.length
             ? `<b>Estimativa incompleta.</b> Sem preço para ${semPreco.map(escapeHtml).join(", ")} — rode <code>refresh-prices</code> ou defina em <code>srt_translator.local.json</code>. `
             : ""
-        }${fontes.length ? "Origem do preço: " + fontes.map(escapeHtml).join("; ") + "." : ""}</div>`;
+        }${fontes.length ? "Origem do preço: " + fontes.map(escapeHtml).join("; ") + ". " : ""}${
+          cambio ? `Convertido a R$ ${Number(cambio.rate).toFixed(4)} por dólar (${escapeHtml(cambio.source)}${cambio.date ? ", " + escapeHtml(cambio.date) : ""}).`
+                 : "Sem cotação do dólar: rode <code>refresh-prices</code> para ver os valores em real."
+        }</div>`;
     }
     function renderCue(item) {
       const st = item.status || "";
@@ -5359,8 +5446,22 @@ def refresh_prices_cli(args: argparse.Namespace) -> int:
     tabela = {modelo: {c: round(v[0], 8) for c, v in cats.items()} for modelo, cats in melhor.items() if cats}
     destino = price_store_path()
     destino.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(destino, {"buscado_em": utc_now()[:10], "regiao": args.region, "modelos": tabela})
+    anterior = load_json(destino, {})
+    cambio = fetch_exchange_rate()
+    atomic_write_json(
+        destino,
+        {
+            "buscado_em": utc_now()[:10],
+            "regiao": args.region,
+            "modelos": tabela,
+            "cambio": cambio or anterior.get("cambio"),
+        },
+    )
     print(f"Guardei preços de {len(tabela)} modelos em {destino}")
+    if cambio:
+        print(f"Câmbio: US$ 1,00 = R$ {cambio['rate']:.4f} ({cambio['source']}, {cambio['date']})")
+    else:
+        print("Não consegui buscar a cotação do dólar no Banco Central; o total sai só em dólar.")
     faltando = []
     for modelo in parse_models(args.models) if getattr(args, "models", None) else DEFAULT_MODELS:
         if not price_for_model(modelo, load_prices()):
@@ -5661,6 +5762,32 @@ Freud.
     assert custo["complete"] is False, "total precisa se declarar incompleto quando falta preço"
     assert abs(custo["total_usd"] - esperado) < 1e-6
     assert estimate_cost({}, tabela_teste)["complete"] is True
+
+    # Conversão para real e marcação de preço de referência.
+    tabela_ref = {
+        "novapro": {"input": 0.001, "output": 0.002, "_fonte": "oficial"},
+        "claudesonnet46": {"input": 0.003, "output": 0.015, "_fonte": "referência", "_referencia": True},
+    }
+    cambio_teste = {"rate": 5.0, "date": "2026-09-04", "source": "teste"}
+    uso_brl = {
+        "us.amazon.nova-pro-v1:0": {"calls": 1, "inputTokens": 1000, "outputTokens": 1000},
+        "us.anthropic.claude-sonnet-4-6": {"calls": 1, "inputTokens": 1000, "outputTokens": 0},
+    }
+    c_brl = estimate_cost(uso_brl, tabela_ref, cambio_teste)
+    nova_l = next(r for r in c_brl["rows"] if "nova" in r["model"])
+    assert abs(nova_l["cost_usd"] - 0.003) < 1e-9
+    assert abs(nova_l["cost_brl"] - 0.015) < 1e-9, nova_l["cost_brl"]
+    assert nova_l["price_is_reference"] is False
+    claude_l = next(r for r in c_brl["rows"] if "claude" in r["model"])
+    assert claude_l["price_is_reference"] is True, "preço de referência precisa se declarar"
+    assert abs(c_brl["total_brl"] - c_brl["total_usd"] * 5.0) < 1e-9
+    # sem câmbio, some o real mas o dólar continua
+    sem_cambio = estimate_cost(uso_brl, tabela_ref, None)
+    assert sem_cambio["total_brl"] is None and sem_cambio["total_usd"] > 0
+    assert all(r["cost_brl"] is None for r in sem_cambio["rows"])
+    # todo modelo da fila padrão tem preço
+    tabela_real = load_prices()
+    assert all(price_for_model(mo, tabela_real) for mo in DEFAULT_MODELS[:4]), "fila padrão sem preço"
 
     print("self-test ok")
     return 0

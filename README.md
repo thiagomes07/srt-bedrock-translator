@@ -325,13 +325,21 @@ tabela sempre diz de onde veio cada preço, para estimativa nunca passar por nú
 python3 srt_bedrock_translator.py refresh-prices
 ```
 
-**A API de preços da AWS não publica os modelos Claude 4.x.** Eles aparecem como *sem preço*
-e o total sai com um sinal de mais, avisando que está incompleto. Para completar, consulte a
-[página de preços do Bedrock](https://aws.amazon.com/bedrock/pricing/) e informe os valores,
-por mil tokens:
+**A API de preços da AWS não publica os modelos Claude 4.x.** Para eles a ferramenta usa a
+[tabela oficial da Anthropic](https://platform.claude.com/docs/en/about-claude/pricing), e
+essas linhas aparecem marcadas como **referência** — a própria Anthropic avisa que a AWS
+opera o Bedrock e pode cobrar diferente, e que endpoint regional (o prefixo `us.`) costuma
+ter 10% de acréscimo sobre o global.
+
+Os valores também são convertidos para **real**, usando a cotação PTAX de venda do
+[Banco Central](https://www.bcb.gov.br/estabilidadefinanceira/historicocotacoes), buscada
+junto com os preços.
+
+Para fixar preço ou câmbio, escreva em `srt_translator.local.json` — preços por mil tokens:
 
 ```json
 {
+  "usd_brl": 5.20,
   "prices": {
     "us.anthropic.claude-sonnet-4-6": {
       "input": 0.003, "output": 0.015,
@@ -340,6 +348,9 @@ por mil tokens:
   }
 }
 ```
+
+Se ainda faltar o preço de algum modelo, o total sai com um sinal de mais, avisando que
+está incompleto.
 
 ## Comandos auxiliares
 
