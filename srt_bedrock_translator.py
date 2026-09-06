@@ -3394,7 +3394,14 @@ def browse_directory(alvo: str | None, base: Path) -> dict[str, Any]:
     if caminho.is_file():
         caminho = caminho.parent
     if not caminho.is_dir():
+        # Todo caminho válido volta resolvido; o de fallback também, senão a mesma
+        # pasta apareceria com dois nomes conforme o jeito de chegar nela
+        # (/tmp e /private/tmp no macOS).
         caminho = base if base.is_dir() else Path.home()
+        try:
+            caminho = caminho.resolve()
+        except OSError:
+            pass
 
     pastas: list[dict[str, str]] = []
     legendas: list[dict[str, Any]] = []
