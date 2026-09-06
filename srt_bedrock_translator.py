@@ -3379,6 +3379,70 @@ def known_job_dirs(base: Path) -> list[Path]:
     return dirs
 
 
+def browse_directory(alvo: str | None, base: Path) -> dict[str, Any]:
+    """Lista pastas e legendas de um diretório, para o seletor de arquivos da UI.
+
+    Só leitura. O servidor escuta em 127.0.0.1 e o campo de caminho absoluto já
+    permitia apontar para qualquer lugar, então isto não amplia o alcance: só
+    troca digitar o caminho por navegar até ele.
+    """
+    caminho = Path(alvo).expanduser() if alvo else base
+    try:
+        caminho = caminho.resolve()
+    except OSError:
+        caminho = base
+    if caminho.is_file():
+        caminho = caminho.parent
+    if not caminho.is_dir():
+        caminho = base if base.is_dir() else Path.home()
+
+    pastas: list[dict[str, str]] = []
+    legendas: list[dict[str, Any]] = []
+    erro = None
+    try:
+        for item in sorted(caminho.iterdir(), key=lambda i: i.name.lower()):
+            if item.name.startswith("."):
+                continue
+            try:
+                if item.is_dir():
+                    pastas.append({"name": item.name, "path": str(item)})
+                elif item.suffix.lower() == ".srt":
+                    legendas.append(
+                        {
+                            "name": item.name,
+                            "path": str(item),
+                            "size": item.stat().st_size,
+                            "traduzida": bool(re.search(r"\.(OK|INCOMPLETO|EM_ANDAMENTO)\.srt$", item.name)),
+                        }
+                    )
+            except OSError:
+                continue
+    except PermissionError:
+        erro = "Sem permissão para ler esta pasta."
+    except OSError as exc:
+        erro = f"Não consegui ler esta pasta: {exc}"
+
+    atalhos = []
+    for rotulo, destino in (
+        ("Pasta atual da UI", base),
+        ("Filmes", Path.home() / "Movies"),
+        ("Downloads", Path.home() / "Downloads"),
+        ("Área de trabalho", Path.home() / "Desktop"),
+        ("Pasta pessoal", Path.home()),
+    ):
+        if destino.is_dir():
+            atalhos.append({"label": rotulo, "path": str(destino.resolve())})
+
+    return {
+        "path": str(caminho),
+        "parent": str(caminho.parent) if caminho.parent != caminho else None,
+        "dirs": pastas,
+        "files": legendas,
+        "shortcuts": atalhos,
+        "error": erro,
+    }
+
+
 def load_jobs(base: Path) -> list[dict[str, Any]]:
     state_paths: dict[str, Path] = {}
     for state_path in base.rglob(".srt_translator_jobs/*/state.json"):
@@ -3671,6 +3735,10 @@ class UIHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "job not found"}, 404)
                 return
             self.send_json({"job": state_for_job_dir(job_dir)})
+            return
+        if parsed.path == "/api/browse":
+            qs = parse_qs(parsed.query)
+            self.send_json(browse_directory((qs.get("path") or [""])[0] or None, self.base))
             return
         if parsed.path == "/api/compare":
             qs = parse_qs(parsed.query)
@@ -4043,6 +4111,44 @@ UI_HTML = r"""<!doctype html>
     #help .tip b { color: #16833a; }
     #help .pin-hint { margin: 8px 0 0; font-size: 11px; color: var(--muted); }
 
+    /* ---- seletor de arquivo ---- */
+    .path-row { display: flex; gap: 6px; }
+    .path-row input { flex: 1; }
+    .path-row button { white-space: nowrap; }
+    #navOverlay {
+      position: fixed; inset: 0; z-index: 70;
+      background: rgba(20, 26, 34, .45);
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    #navOverlay[hidden] { display: none; }
+    #navBox {
+      background: #fff; border-radius: 12px; width: 720px; max-width: 100%;
+      max-height: 82vh; display: flex; flex-direction: column;
+      box-shadow: 0 24px 60px rgba(20,26,34,.3);
+    }
+    .nav-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .nav-head button { background: none; border: none; font-size: 20px; color: var(--muted); cursor: pointer; padding: 0 4px; }
+    .nav-atalhos { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 16px 0; }
+    .nav-atalhos button { padding: 4px 10px; font-size: 12px; font-weight: 600; background: #eef2f7; }
+    .nav-caminho {
+      padding: 10px 16px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px; color: var(--muted); overflow-wrap: anywhere;
+    }
+    .nav-lista { flex: 1; overflow: auto; border-top: 1px solid var(--line); }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 9px 16px; border: 0; border-bottom: 1px solid #f2f4f8;
+      background: #fff; cursor: pointer; text-align: left; font: inherit; font-size: 13px;
+    }
+    .nav-item:hover { background: #f5f8fd; }
+    .nav-item .ic { width: 18px; text-align: center; }
+    .nav-item .nome { flex: 1; overflow-wrap: anywhere; }
+    .nav-item .tag { font-size: 11px; color: var(--amber); font-weight: 700; }
+    .nav-item .tam { font-size: 11px; color: var(--muted); }
+    .nav-item.srt .nome { font-weight: 650; }
+    .nav-rodape { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); min-height: 20px; }
+
     /* ---- toasts ---- */
     #toasts {
       position: fixed;
@@ -4314,6 +4420,18 @@ UI_HTML = r"""<!doctype html>
   </header>
   <div id="toasts" aria-live="polite"></div>
   <div id="help" role="tooltip"></div>
+  <div id="navOverlay" hidden>
+    <div id="navBox" role="dialog" aria-label="Escolher legenda">
+      <div class="nav-head">
+        <strong>Escolher legenda</strong>
+        <button id="navFechar" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="nav-atalhos" id="navAtalhos"></div>
+      <div class="nav-caminho" id="navCaminho"></div>
+      <div class="nav-lista" id="navLista"></div>
+      <div class="nav-rodape"><span id="navAviso"></span></div>
+    </div>
+  </div>
   <main>
     <section>
       <div class="panel-head">
@@ -4327,8 +4445,11 @@ UI_HTML = r"""<!doctype html>
         <label class="field-label" for="file">Legenda encontrada <button class="info" data-help="file" aria-label="Ajuda">i</button></label>
         <select id="file"></select>
 
-        <label class="field-label" for="path">Ou caminho absoluto <button class="info" data-help="path" aria-label="Ajuda">i</button></label>
-        <input id="path" placeholder="/caminho/arquivo.srt">
+        <label class="field-label" for="path">Ou escolha outra legenda <button class="info" data-help="path" aria-label="Ajuda">i</button></label>
+        <div class="path-row">
+          <input id="path" placeholder="/caminho/arquivo.srt">
+          <button id="procurar" type="button">Procurar...</button>
+        </div>
 
         <div class="row">
           <div>
@@ -4491,10 +4612,10 @@ UI_HTML = r"""<!doctype html>
         d: "Escolha aqui. Só use o campo de baixo se a legenda estiver em outra pasta."
       },
       path: {
-        t: "Ou caminho absoluto",
-        p: "O endereco completo de uma legenda que não está na pasta acima. Se você escrever algo aqui, este campo manda e a escolha do campo de cima é ignorada.",
-        e: "Para traduzir algo que está em Downloads, cole algo como <code>/Users/seu-usuário/Downloads/Filme.srt</code>. Atalho útil: no Finder, clique no arquivo e aperte Cmd+Option+C, que copia o caminho completo pronto para colar aqui.",
-        d: "Deixe vazio no uso normal."
+        t: "Ou escolha outra legenda",
+        p: "Para traduzir uma legenda que não está na pasta acima, clique em <b>Procurar</b> e navegue até ela. O que estiver aqui manda, e a escolha do campo de cima é ignorada.",
+        e: "O botão abre um navegador de pastas com atalhos para Filmes, Downloads e sua pasta pessoal. Legendas que a própria ferramenta já gerou aparecem marcadas como <b>já traduzida</b>, para você não escolher a saída no lugar do original por engano.<br><br>Também dá para colar o caminho direto no campo. Atalho útil: no Finder, clique no arquivo e aperte Cmd+Option+C para copiar o caminho completo.<br><br>Legenda de outra pasta funciona normalmente: o trabalho aparece na lista, com log e botão de parar, e os arquivos são gravados ao lado dela.",
+        d: "Use Procurar para trocar de filme sem reiniciar a UI."
       },
       profile: {
         t: "AWS profile",
@@ -4829,6 +4950,64 @@ UI_HTML = r"""<!doctype html>
       b.classList.toggle("busy", !!on);
       b.disabled = !!on;
     }
+
+    /* ---------- seletor de legenda ---------- */
+    const navOverlay = document.querySelector("#navOverlay");
+    let navPastaAtual = null;
+
+    function tamanhoLegivel(bytes) {
+      if (!bytes) return "";
+      return bytes > 1024 * 1024
+        ? (bytes / 1024 / 1024).toFixed(1) + " MB"
+        : Math.max(1, Math.round(bytes / 1024)) + " KB";
+    }
+    async function navegar(caminho) {
+      const dados = await api("/api/browse" + (caminho ? "?path=" + encodeURIComponent(caminho) : ""));
+      navPastaAtual = dados.path;
+      document.querySelector("#navCaminho").textContent = dados.path;
+      document.querySelector("#navAtalhos").innerHTML = (dados.shortcuts || [])
+        .map(a => `<button data-ir="${escapeHtml(a.path)}">${escapeHtml(a.label)}</button>`).join("");
+      const partes = [];
+      if (dados.parent) {
+        partes.push(`<button class="nav-item" data-ir="${escapeHtml(dados.parent)}">
+          <span class="ic">&#8617;</span><span class="nome">Subir um nível</span></button>`);
+      }
+      for (const d of dados.dirs) {
+        partes.push(`<button class="nav-item" data-ir="${escapeHtml(d.path)}">
+          <span class="ic">&#128193;</span><span class="nome">${escapeHtml(d.name)}</span></button>`);
+      }
+      for (const f of dados.files) {
+        partes.push(`<button class="nav-item srt" data-escolher="${escapeHtml(f.path)}">
+          <span class="ic">&#127916;</span><span class="nome">${escapeHtml(f.name)}</span>
+          ${f.traduzida ? "<span class='tag'>já traduzida</span>" : ""}
+          <span class="tam">${tamanhoLegivel(f.size)}</span></button>`);
+      }
+      document.querySelector("#navLista").innerHTML =
+        partes.join("") || "<div class='empty' style='padding:16px'>Nada aqui. Suba um nível ou use um atalho.</div>";
+      document.querySelector("#navAviso").textContent =
+        dados.error || `${dados.dirs.length} pasta(s), ${dados.files.length} legenda(s) nesta pasta.`;
+    }
+    function abrirNavegador() {
+      navOverlay.hidden = false;
+      const partida = document.querySelector("#path").value.trim() || document.querySelector("#file").value || "";
+      navegar(partida || null).catch(e => toast("Não consegui abrir a pasta", e.message, "error"));
+    }
+    function fecharNavegador() { navOverlay.hidden = true; }
+    document.querySelector("#procurar").onclick = abrirNavegador;
+    document.querySelector("#navFechar").onclick = fecharNavegador;
+    navOverlay.addEventListener("click", ev => { if (ev.target === navOverlay) fecharNavegador(); });
+    document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !navOverlay.hidden) fecharNavegador(); });
+    document.querySelector("#navBox").addEventListener("click", ev => {
+      const ir = ev.target.closest("[data-ir]");
+      if (ir) { navegar(ir.dataset.ir).catch(e => toast("Não consegui abrir a pasta", e.message, "error")); return; }
+      const escolher = ev.target.closest("[data-escolher]");
+      if (escolher) {
+        const caminho = escolher.dataset.escolher;
+        document.querySelector("#path").value = caminho;
+        fecharNavegador();
+        toast("Legenda selecionada", caminho.split("/").pop() + " — clique em Iniciar ou retomar para traduzir.", "success");
+      }
+    });
 
     /* ---------- api ---------- */
     async function api(path, opts) {
@@ -5788,6 +5967,29 @@ Freud.
     # todo modelo da fila padrão tem preço
     tabela_real = load_prices()
     assert all(price_for_model(mo, tabela_real) for mo in DEFAULT_MODELS[:4]), "fila padrão sem preço"
+
+    # Navegador de pastas: lista, marca saída da ferramenta e não quebra em caminho ruim.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp)
+        (raiz / "sub").mkdir()
+        (raiz / ".oculta").mkdir()
+        (raiz / "filme.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nOi.\n", encoding="utf-8")
+        (raiz / "filme.pt-BR.OK.srt").write_text("x", encoding="utf-8")
+        (raiz / "leiame.txt").write_text("x", encoding="utf-8")
+        listagem = browse_directory(str(raiz), raiz)
+        nomes_dir = {d["name"] for d in listagem["dirs"]}
+        nomes_srt = {f["name"] for f in listagem["files"]}
+        assert nomes_dir == {"sub"}, nomes_dir           # pasta oculta fica de fora
+        assert nomes_srt == {"filme.srt", "filme.pt-BR.OK.srt"}, nomes_srt  # só .srt
+        marcadas = {f["name"]: f["traduzida"] for f in listagem["files"]}
+        assert marcadas["filme.pt-BR.OK.srt"] is True, "saída da ferramenta precisa vir marcada"
+        assert marcadas["filme.srt"] is False
+        assert listagem["shortcuts"], "atalhos ausentes"
+        # apontar para um arquivo abre a pasta dele; caminho inexistente cai na base
+        assert browse_directory(str(raiz / "filme.srt"), raiz)["path"] == str(raiz.resolve())
+        assert browse_directory(str(raiz / "nao" / "existe"), raiz)["path"] == str(raiz.resolve())
 
     print("self-test ok")
     return 0

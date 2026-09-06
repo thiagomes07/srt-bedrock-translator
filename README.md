@@ -114,6 +114,11 @@ Se a porta estiver ocupada, use `--port 8766`.
 Na tela: escolha a legenda no primeiro campo, clique em **Testar Bedrock** se for a
 primeira vez do dia, e depois em **Iniciar ou retomar**.
 
+Para traduzir um filme de outra pasta, não precisa reiniciar nada: clique em **Procurar** e
+navegue até a legenda, com atalhos para Filmes, Downloads e a pasta pessoal. As legendas que
+a própria ferramenta gerou aparecem marcadas como *já traduzida*, para você não escolher a
+saída no lugar do original.
+
 Nenhum campo exige que você saiba o que ele significa. Todo campo, botão, número e métrica
 tem um ícone **ⓘ** que abre uma explicação com exemplo concreto — e diz se você precisa
 mexer, o que quase nunca é o caso:
